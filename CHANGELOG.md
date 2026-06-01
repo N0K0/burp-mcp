@@ -1,0 +1,49 @@
+# Changelog
+
+All notable changes to the Burp MCP Server plugin.
+
+## [1.1.0] — 2026-05-28
+
+### Added
+- **Structured Logging:** `LogEntry` record with ISO 8601 timestamps, log levels, correlation IDs, and JSON-lines output to disk
+- **Log Levels:** `log_level` preference (DEBUG/INFO/WARN/ERROR, default INFO) with level filtering in UI log viewer
+- **Log Rotation:** ErrorLogger now rotates at 5MB, keeps 3 backup files, writes JVM info on session start
+- **Metrics:** `MetricsCollector` with latency percentile ring buffer, rolling request rate, per-tool call counts; new `burp_metrics` MCP tool (JSON + Prometheus format); `metrics_enabled` preference
+- **Health Endpoint:** `GET /health` returns `{"status":"ok"}/{"status":"error"}` with uptime and version; `?format=prometheus` for Prometheus export
+- **Rate Limiting:** Token-bucket rate limiter keyed by source IP with `rate_limit_per_minute` (default 100) and 10% burst; returns HTTP 429 with Retry-After header
+- **Circuit Breaker:** For external-calling tools (http_send_*, scanner_start_*, collaborator_*); opens after 5 consecutive failures in 60s, half-open probe after 30s
+- **New Tools:** `burp_metrics`, `config_list_preferences`, `sitemap_search` (regex full-text), `scope_list`; tool aliases (`proxy_list`→`proxy_history_list`, `send_request`→`http_send_request`, etc.)
+- **UI — Dashboard:** StatusPanel now shows uptime, req/min, P95 latency, error count, rate-limited count
+- **UI — Log Filtering:** Level filter dropdown (ALL/INFO/WARN/ERROR/DEBUG), real-time search with highlighting, auto-scroll toggle, export button
+- **UI — Settings:** Inline validation (red border on invalid fields), logical group separators (Server/Limits/Features/Logging/Security), export/import config as JSON
+- **UI — ToolTester:** Split-view (args/result side-by-side), invocation history dropdown, Copy cURL, Share as markdown, Format JSON button, visual error treatment
+- **UI — Permissions:** Presets dropdown (Read-Write/Read-Only/Custom), tool count summary, search/filter bar, lock icons for sensitive tools, Select All Read/Write buttons, status bar
+- **UI — McpColors:** Shared color palette and font constants for consistent styling across all panels
+- **Input Validation:** `InputValidator` utility for URLs, file paths, cookies, and Collaborator data
+- **Error Translation:** McpServer maps `ConnectException`, `SocketTimeoutException`, `UnknownHostException`, `SSLException`, and `IllegalArgumentException` to meaningful MCP error codes
+- **Cache Improvements:** RequestCache now has LRU eviction (max 1000 entries), hit/miss/eviction stats, `cache_enabled` preference
+- **Config:** `log_level`, `logging_file_path`, `max_queue_size`, `max_connections_per_ip`, `metrics_enabled`, `cache_enabled`, `audit_log_enabled` preferences; environment variable support (`BURP_MCP_PORT`, `BURP_MCP_BIND_ADDRESS`, `BURP_MCP_AUTH_TOKEN`, `BURP_MCP_LOG_LEVEL`)
+- **Error Codes:** `-32006 RATE_LIMITED`, `-32007 SERVER_BUSY`
+
+### Changed
+- Refactored `McPServer.serve()` with structured logging, correlation IDs, rate limiting, circuit breaker, and error translation
+- `McpToolRegistry.callTool()` resolves aliases with DEBUG-level logging
+- `ErrorLogger` uses structured JSON-lines output with rotation
+- `BurpMcpExtension` wires MetricsCollector, ErrorLogger config path, and new tools
+- Settings panel now has 20+ configurable preferences with validated input fields
+
+### Fixed
+- Inline validation in SettingsPanel catches invalid port numbers and numeric ranges before save
+- Log area auto-truncates at 10,000 lines to prevent UI memory leaks
+
+## [1.0.0] — 2026-05-28
+
+### Added
+- Initial release with ~40 MCP tools covering HTTP, sitemap, proxy, scope, decoder, repeater, intruder, comparer, cookie, scanner (Pro), collaborator (Pro), config, and logger
+- 4-tab Swing UI (Status/Settings/ToolTester/Permissions)
+- Bearer token authentication middleware
+- TLS/HTTPS support via BouncyCastle (self-signed or custom PKCS12)
+- Permission middleware (READ_ONLY/READ_WRITE/CUSTOM with sensitivity gate)
+- File-based ErrorLogger for offline log inspection
+- JSON-RPC 2.0 over HTTP via NanoHTTPD
+- 41 JUnit 5 + AssertJ tests (26 unit + 15 integration)
