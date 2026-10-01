@@ -42,7 +42,7 @@ public class CookieSetTool implements Tool {
         props.set("value", McpJson.property("string", "Cookie value"));
         props.set("domain", McpJson.property("string", "Cookie domain (e.g., example.com)"));
         props.set("path", McpJson.property("string", "Cookie path (default: '/')", "/"));
-        props.set("expiration", McpJson.property("string", "Expiration date in ISO 8601 format (e.g., 2026-12-31T23:59:59Z)", "/"));
+        props.set("expiration", McpJson.property("string", "Expiration date in ISO 8601 format (e.g., 2026-12-31T23:59:59Z)", ""));
         schema.set("properties", props);
 
         ArrayNode required = McpJson.createArrayNode();
@@ -63,8 +63,16 @@ public class CookieSetTool implements Tool {
         if (name == null || name.isEmpty()) {
             throw new McpError(McpError.INVALID_PARAMS, "'name' is required");
         }
+        String nameError = burp.mcp.util.InputValidator.validateCookieValue(name, "'name'");
+        if (nameError != null) {
+            throw new McpError(McpError.INVALID_PARAMS, nameError);
+        }
         if (value == null) {
             throw new McpError(McpError.INVALID_PARAMS, "'value' is required");
+        }
+        String valueError = burp.mcp.util.InputValidator.validateCookieValue(value, "'value'");
+        if (valueError != null) {
+            throw new McpError(McpError.INVALID_PARAMS, valueError);
         }
         if (domain == null || domain.isEmpty()) {
             throw new McpError(McpError.INVALID_PARAMS, "'domain' is required");

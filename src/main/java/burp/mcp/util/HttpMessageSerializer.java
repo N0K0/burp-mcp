@@ -8,7 +8,6 @@ import burp.api.montoya.http.message.responses.HttpResponse;
 import burp.api.montoya.scanner.audit.issues.AuditIssue;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 import static burp.mcp.util.McpConfig.getInstance;
 
@@ -17,6 +16,31 @@ import static burp.mcp.util.McpConfig.getInstance;
  * Handles body truncation and binary data.
  */
 public class HttpMessageSerializer {
+
+    /** Max request/response pairs embedded in one audit issue. */
+    private static final int MAX_AUDIT_PAIRS = 100;
+
+    private static int maxResponseBytes() {
+        McpConfig config = getInstance();
+        return config != null ? config.getMaxResponseBodyBytes() : 100_000;
+    }
+
+    /**
+     * Truncate text so its UTF-8 encoding fits in maxBytes.
+     * Cuts on char boundaries, so multi-byte sequences stay intact.
+     */
+    static String truncateText(String text, int maxBytes) {
+        if (text == null) return "";
+        byte[] all = text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (all.length <= maxBytes) return text;
+        // Estimate the char cut point, then back off until it fits.
+        int cut = Math.max(1, (int) ((long) maxBytes * text.length() / all.length));
+        while (cut > 0
+                && text.substring(0, cut).getBytes(java.nio.charset.StandardCharsets.UTF_8).length > maxBytes) {
+            cut--;
+        }
+        return text.substring(0, cut);
+    }
 
     /**
      * Serialize an HttpRequest to a Map.
@@ -51,15 +75,22 @@ public class HttpMessageSerializer {
         }
         result.put("parameters", params);
 
-        // Body
+        // Body (truncated to max_response_body_bytes, like responses)
         byte[] bodyBytes = request.body().getBytes();
-        if (bodyBytes.length > 0) {
+        int maxBytes = maxResponseBytes();
+        if (bodyBytes.length > maxBytes) {
+            result.put("body", truncateText(ByteArrayConverter.bytesToString(bodyBytes), maxBytes));
+            result.put("bodySize", bodyBytes.length);
+            result.put("truncated", true);
+        } else if (bodyBytes.length > 0) {
             String body = ByteArrayConverter.bytesToString(bodyBytes);
             result.put("body", body);
             result.put("bodySize", bodyBytes.length);
+            result.put("truncated", false);
         } else {
             result.put("body", "");
             result.put("bodySize", 0);
+            result.put("truncated", false);
         }
 
         // Content type
@@ -76,7 +107,6 @@ public class HttpMessageSerializer {
     public static Map<String, Object> serializeResponse(HttpResponse response) {
         if (response == null) return Collections.emptyMap();
 
-        McpConfig config = getInstance();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("statusCode", response.statusCode());
         result.put("status_text", response.reasonPhrase());
@@ -91,11 +121,11 @@ public class HttpMessageSerializer {
         }
         result.put("headers", headers);
 
-        // Body with truncation
+        // Body with truncation (char-boundary safe)
         byte[] bodyBytes = response.body().getBytes();
-        int maxBytes = config.getMaxResponseBodyBytes();
+        int maxBytes = maxResponseBytes();
         if (bodyBytes.length > maxBytes) {
-            String body = ByteArrayConverter.bytesToString(Arrays.copyOf(bodyBytes, maxBytes));
+            String body = truncateText(ByteArrayConverter.bytesToString(bodyBytes), maxBytes);
             result.put("body", body);
             result.put("bodySize", bodyBytes.length);
             result.put("truncated", true);
@@ -159,7 +189,8 @@ public class HttpMessageSerializer {
     }
 
     /**
-     * Serialize an AuditIssue.
+     * Serialize an AuditIssue. Caps embedded request/response pairs so one
+     * issue with a huge history can't return megabytes.
      */
     public static Map<String, Object> serializeAuditIssue(AuditIssue issue) {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -170,12 +201,16 @@ public class HttpMessageSerializer {
         result.put("severity", issue.severity().name());
         result.put("confidence", issue.confidence().name());
 
-        // Request/response pairs
+        // Request/response pairs (capped)
+        List<HttpRequestResponse> all = issue.requestResponses();
         List<Map<String, Object>> reqResps = new ArrayList<>();
-        for (HttpRequestResponse hr : issue.requestResponses()) {
-            reqResps.add(serializeHttpRequestResponse(hr));
+        int shown = Math.min(all.size(), MAX_AUDIT_PAIRS);
+        for (int i = 0; i < shown; i++) {
+            reqResps.add(serializeHttpRequestResponse(all.get(i)));
         }
         result.put("requestResponses", reqResps);
+        result.put("requestResponseCount", all.size());
+        result.put("truncated", all.size() > shown);
 
         return result;
     }

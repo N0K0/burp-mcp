@@ -152,47 +152,85 @@ public class MessageViewerPanel extends JPanel {
 
     // ── Refresh ──
 
-    private void refreshEntries() {
-        String src = (String) sourceCombo.getSelectedItem();
-        proxyEntries.clear();
-        sitemapEntries.clear();
-        comboModel.removeAllElements();
+    /** Snapshot built off the EDT, swapped into the UI in done(). */
+    private record RefreshResult(
+            List<ProxyEntry> proxy,
+            List<SitemapEntry> sitemap,
+            List<String> labels,
+            String status) {}
 
-        if ("Proxy History".equals(src)) {
-            int count = 0;
-            for (var e : api.proxy().history()) {
-                if (count++ >= 2000) break;
-                int sc = e.response() != null ? e.response().statusCode() : 0;
-                String label = "[" + sc + "] " + e.finalRequest().method() + " " + shortUrl(e.finalRequest().url(), 80);
-                proxyEntries.add(new ProxyEntry(e.id(), label));
-                comboModel.addElement(e.id() + "  " + label);
+    private void refreshEntries() {
+        final String src = (String) sourceCombo.getSelectedItem();
+        statusLabel.setText("Loading " + src + "...");
+        statusLabel.setForeground(McpColors.GRAY);
+
+        new SwingWorker<RefreshResult, Void>() {
+            @Override
+            protected RefreshResult doInBackground() {
+                // Montoya history iteration happens off the EDT.
+                List<ProxyEntry> proxy = new ArrayList<>();
+                List<SitemapEntry> sitemap = new ArrayList<>();
+                List<String> labels = new ArrayList<>();
+                String status;
+                if ("Proxy History".equals(src)) {
+                    int count = 0;
+                    for (var e : api.proxy().history()) {
+                        if (count++ >= 2000) break;
+                        int sc = e.response() != null ? e.response().statusCode() : 0;
+                        String label = "[" + sc + "] " + e.finalRequest().method() + " " + shortUrl(e.finalRequest().url(), 80);
+                        proxy.add(new ProxyEntry(e.id(), label));
+                        labels.add(e.id() + "  " + label);
+                    }
+                    status = count + " proxy entries";
+                } else if ("Sitemap (URL)".equals(src)) {
+                    int count = 0;
+                    for (var e : api.siteMap().requestResponses()) {
+                        if (count++ >= 2000) break;
+                        int sc = e.response() != null ? e.response().statusCode() : 0;
+                        String url = e.request() != null ? e.request().url() : "?";
+                        String method = e.request() != null ? e.request().method() : "?";
+                        String label = "[" + sc + "] " + method + " " + shortUrl(url, 80);
+                        sitemap.add(new SitemapEntry(url, label));
+                        labels.add(count + "  " + label);
+                    }
+                    status = count + " sitemap entries";
+                } else {
+                    var msgs = api.proxy().webSocketHistory();
+                    for (int i = 0; i < msgs.size() && i < 2000; i++) {
+                        var m = msgs.get(i);
+                        String label = m.direction().name() + " | " + m.payload().length() + "b | " + m.time();
+                        proxy.add(new ProxyEntry(i, label)); // reuse ProxyEntry for WS index
+                        labels.add(i + "  " + label);
+                    }
+                    status = msgs.size() + " WS messages";
+                }
+                return new RefreshResult(proxy, sitemap, labels, status);
             }
-            statusLabel.setText(count + " proxy entries");
-        } else if ("Sitemap (URL)".equals(src)) {
-            int count = 0;
-            for (var e : api.siteMap().requestResponses()) {
-                if (count++ >= 2000) break;
-                int sc = e.response() != null ? e.response().statusCode() : 0;
-                String url = e.request() != null ? e.request().url() : "?";
-                String method = e.request() != null ? e.request().method() : "?";
-                String label = "[" + sc + "] " + method + " " + shortUrl(url, 80);
-                sitemapEntries.add(new SitemapEntry(url, label));
-                comboModel.addElement(count + "  " + label);
+
+            @Override
+            protected void done() {
+                // Drop stale results if the user switched source mid-load.
+                if (!src.equals(sourceCombo.getSelectedItem())) return;
+                RefreshResult r;
+                try {
+                    r = get();
+                } catch (Exception e) {
+                    statusLabel.setText("Load failed: " + e.getMessage());
+                    statusLabel.setForeground(McpColors.RED);
+                    return;
+                }
+                proxyEntries.clear();
+                proxyEntries.addAll(r.proxy());
+                sitemapEntries.clear();
+                sitemapEntries.addAll(r.sitemap());
+                comboModel.removeAllElements();
+                for (String label : r.labels()) comboModel.addElement(label);
+                statusLabel.setText(r.status());
+                statusLabel.setForeground(McpColors.GREEN);
+                currentIndex = -1;
+                navLabel.setText("-/" + comboModel.getSize());
             }
-            statusLabel.setText(count + " sitemap entries");
-        } else {
-            var msgs = api.proxy().webSocketHistory();
-            for (int i = 0; i < msgs.size() && i < 2000; i++) {
-                var m = msgs.get(i);
-                String label = m.direction().name() + " | " + m.payload().length() + "b | " + m.time();
-                proxyEntries.add(new ProxyEntry(i, label)); // reuse ProxyEntry for WS index
-                comboModel.addElement(i + "  " + label);
-            }
-            statusLabel.setText(msgs.size() + " WS messages");
-        }
-        statusLabel.setForeground(McpColors.GREEN);
-        currentIndex = -1;
-        navLabel.setText("-/" + comboModel.getSize());
+        }.execute();
     }
 
     private void onSourceChange() {

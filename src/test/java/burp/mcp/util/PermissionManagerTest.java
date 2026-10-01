@@ -93,6 +93,16 @@ class PermissionManagerTest {
     }
 
     @Test
+    void readOnlyMode_shouldAllowNewQueryTools() {
+        pm.setLevel(PermissionManager.Level.READ_ONLY);
+        assertThat(pm.checkAccess("scope_list")).isNull();
+        assertThat(pm.checkAccess("sitemap_search")).isNull();
+        assertThat(pm.checkAccess("config_list_preferences")).isNull();
+        assertThat(pm.checkAccess("websocket_history_get")).isNull();
+        assertThat(pm.checkAccess("burp_metrics")).isNull();
+    }
+
+    @Test
     void toolCategories_shouldHaveExpectedSensitiveTools() {
         assertThat(PermissionManager.isSensitive("scope_set")).isTrue();
         assertThat(PermissionManager.isSensitive("config_set")).isTrue();

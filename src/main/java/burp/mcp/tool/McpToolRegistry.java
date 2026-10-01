@@ -117,8 +117,12 @@ public class McpToolRegistry {
 
     /**
      * Resolve common user-facing aliases to canonical tool names.
+     * Public so the server permission gate can canonicalize before checking.
      */
-    private String resolveAlias(String name) {
+    public static String resolveAlias(String name) {
+        if (name == null) {
+            return null;
+        }
         return switch (name) {
             case "proxy_list" -> "proxy_history_list";
             case "proxy_get" -> "proxy_history_get";
@@ -127,6 +131,14 @@ public class McpToolRegistry {
             case "send_to_repeater" -> "http_send_to_repeater";
             default -> name;
         };
+    }
+
+    /**
+     * Canonicalize a tool name for permission checks, metrics, and dispatch.
+     * Null-safe: returns null when input is null.
+     */
+    public static String canonicalName(String name) {
+        return resolveAlias(name);
     }
 
     /**

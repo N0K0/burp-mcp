@@ -21,6 +21,7 @@ import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,8 +46,10 @@ public class McPServer extends NanoHTTPD {
     private volatile RateLimiter rateLimiter;
     // Circuit breakers for external-calling tools
     private final ConcurrentHashMap<String, CircuitBreaker> circuitBreakers = new ConcurrentHashMap<>();
-    // Per-IP connection tracking
+    // Per-IP connection tracking (enforces max_connections_per_ip)
     private final ConcurrentHashMap<String, AtomicInteger> connectionsPerIp = new ConcurrentHashMap<>();
+    private final AtomicInteger totalActive = new AtomicInteger();
+    private final BoundedAsyncRunner boundedRunner;
 
     public McPServer(MontoyaApi api, McpToolRegistry registry, String bindAddress, int port,
                      PermissionManager permissions, MetricsCollector metrics) {
@@ -56,6 +59,10 @@ public class McPServer extends NanoHTTPD {
         this.permissions = permissions;
         this.metrics = metrics;
         this.config = McpConfig.getInstance();
+        int threads = config != null ? config.getThreadPoolSize() : 10;
+        int queue = config != null ? config.getMaxQueueSize() : 100;
+        this.boundedRunner = new BoundedAsyncRunner(threads, queue);
+        setAsyncRunner(boundedRunner);
     }
 
     public McPServer(MontoyaApi api, McpToolRegistry registry, String bindAddress, int port) {
@@ -69,15 +76,32 @@ public class McPServer extends NanoHTTPD {
 
     @Override
     public Response serve(IHTTPSession session) {
+        String ip = extractClientIp(session);
+        int max = config != null ? config.getMaxConnectionsPerIp() : 10;
+        AtomicInteger counter = connectionsPerIp.computeIfAbsent(ip, k -> new AtomicInteger());
+        int active = counter.incrementAndGet();
+        int total = totalActive.incrementAndGet();
+        if (metrics != null) metrics.setActiveConnections(total);
         try {
-            return serveInternal(session);
-        } catch (Throwable t) {
-            try { api.logging().logToError("[burp-mcp] UNCATCHED", t); } catch (Exception ignored) {}
-            LogEntry entry = LogEntry.create("ERROR", "McPServer:serve", null, 0, "Uncaught exception", t);
-            try { burp.mcp.util.ErrorLogger.log(entry); } catch (Exception ignored) {}
-            if (metrics != null) metrics.recordError();
-            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_JSON,
-                    McpJson.buildError(McpError.INTERNAL_ERROR, "Internal server error", null, null));
+            if (active > max) {
+                if (metrics != null) metrics.recordServerBusy();
+                return newFixedLengthResponse(Response.Status.SERVICE_UNAVAILABLE, MIME_JSON,
+                        McpJson.buildError(McpError.SERVER_BUSY, "Too many concurrent connections", null, null));
+            }
+            try {
+                return serveInternal(session);
+            } catch (Throwable t) {
+                try { api.logging().logToError("[burp-mcp] UNCATCHED", t); } catch (Exception ignored) {}
+                LogEntry entry = LogEntry.create("ERROR", "McPServer:serve", null, 0, "Uncaught exception", t);
+                try { burp.mcp.util.ErrorLogger.log(entry); } catch (Exception ignored) {}
+                if (metrics != null) metrics.recordError();
+                return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_JSON,
+                        McpJson.buildError(McpError.INTERNAL_ERROR, "Internal server error", null, null));
+            }
+        } finally {
+            totalActive.decrementAndGet();
+            if (metrics != null) metrics.setActiveConnections(totalActive.get());
+            if (counter.decrementAndGet() <= 0) connectionsPerIp.remove(ip, counter);
         }
     }
 
@@ -99,20 +123,27 @@ public class McPServer extends NanoHTTPD {
 
         // ── Auth ──
         if (config != null && config.isAuthEnabled()) {
+            String configuredToken = config.getAuthToken();
+            if (configuredToken == null || configuredToken.isEmpty()) {
+                logStructured("ERROR", "McPServer:auth", correlationId, startTime,
+                        "DENIED: auth enabled but no token configured", null);
+                return newFixedLengthResponse(Response.Status.SERVICE_UNAVAILABLE, MIME_JSON,
+                        McpJson.buildError(McpError.INTERNAL_ERROR, "Server auth misconfigured", null, null));
+            }
             String ah = session.getHeaders().get("authorization");
             if (ah == null) ah = session.getHeaders().get("Authorization");
             if (ah == null || !ah.startsWith("Bearer ")) {
                 logStructured("WARN", "McPServer:auth", correlationId, startTime,
                         "DENIED: missing auth", null);
                 return newFixedLengthResponse(Response.Status.UNAUTHORIZED, MIME_JSON,
-                        McpJson.buildError(-32005, "Authorization: Bearer *** required", null, null));
+                        McpJson.buildError(McpError.PERMISSION_DENIED, "Authorization: Bearer *** required", null, null));
             }
             String token = ah.substring(7).trim();
-            if (!token.equals(config.getAuthToken())) {
+            if (token.isEmpty() || !constantTimeEquals(token, configuredToken)) {
                 logStructured("WARN", "McPServer:auth", correlationId, startTime,
                         "DENIED: bad token", null);
                 return newFixedLengthResponse(Response.Status.UNAUTHORIZED, MIME_JSON,
-                        McpJson.buildError(-32005, "Invalid token", null, null));
+                        McpJson.buildError(McpError.PERMISSION_DENIED, "Invalid token", null, null));
             }
             logStructured("DEBUG", "McPServer:auth", correlationId, startTime,
                     "AUTH OK", null);
@@ -131,7 +162,14 @@ public class McPServer extends NanoHTTPD {
                         "no content-length", null);
                 return badReq("Missing Content-Length");
             }
-            int len = Integer.parseInt(cl.trim());
+            int len;
+            try {
+                len = Integer.parseInt(cl.trim());
+            } catch (NumberFormatException nfe) {
+                logStructured("ERROR", "McPServer", correlationId, startTime,
+                        "bad content-length: " + cl, null);
+                return badReq("Invalid Content-Length");
+            }
             if (len <= 0 || len > MAX_BODY_SIZE) {
                 logStructured("ERROR", "McPServer", correlationId, startTime,
                         "bad body size: " + len, null);
@@ -144,6 +182,11 @@ public class McPServer extends NanoHTTPD {
             int off = 0;
             InputStream is = session.getInputStream();
             while (off < len) { int n = is.read(buf, off, len - off); if (n == -1) break; off += n; }
+            if (off != len) {
+                logStructured("ERROR", "McPServer", correlationId, startTime,
+                        "truncated body: expected=" + len + " received=" + off, null);
+                return badReq("Incomplete request body");
+            }
             body = new String(buf, 0, off, StandardCharsets.UTF_8);
         } catch (IOException e) {
             logStructured("ERROR", "McPServer", correlationId, startTime,
@@ -187,11 +230,17 @@ public class McPServer extends NanoHTTPD {
             } else if ("tools/call".equals(method)) {
                 Map<String, Object> params = req.params;
                 if (params == null) throw new McpError(McpError.INVALID_PARAMS, "Missing params");
-                String toolName = (String) params.get("name");
+                Object rawName = params.get("name");
+                if (!(rawName instanceof String toolNameRaw) || toolNameRaw.isEmpty()) {
+                    throw new McpError(McpError.INVALID_PARAMS, "'name' must be a non-empty string");
+                }
+                // Canonicalize aliases before permission, rate-limit, circuit-breaker, and dispatch
+                // so CUSTOM disables and sensitivity gates cannot be bypassed via alias.
+                String toolName = McpToolRegistry.canonicalName(toolNameRaw);
 
                 // ── Rate limiting (tools/call only) ──
                 if (config != null) {
-                    if (rateLimiter == null) rateLimiter = new RateLimiter(config.getRateLimitPerMinute());
+                    ensureRateLimiter();
                     String ip = extractClientIp(session);
                     long waitSec = rateLimiter.tryConsume(ip);
                     if (waitSec > 0) {
@@ -204,7 +253,7 @@ public class McPServer extends NanoHTTPD {
                     }
                 }
 
-                // ── Permission check ──
+                // ── Permission check (canonical name) ──
                 String deny = permissions.checkAccess(toolName);
                 if (deny != null) {
                     logStructured("WARN", "McPServer", correlationId, startTime,
@@ -216,9 +265,17 @@ public class McPServer extends NanoHTTPD {
                 logStructured("DEBUG", "McPServer", correlationId, startTime,
                         "perm gate: " + toolName + " ALLOWED", null);
 
-                @SuppressWarnings("unchecked")
-                Map<String, Object> toolArgs = (Map<String, Object>) params.get("arguments");
-                if (toolArgs == null) toolArgs = java.util.Collections.emptyMap();
+                Object rawArgs = params.get("arguments");
+                Map<String, Object> toolArgs;
+                if (rawArgs == null) {
+                    toolArgs = java.util.Collections.emptyMap();
+                } else if (rawArgs instanceof Map<?, ?> m) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> cast = (Map<String, Object>) m;
+                    toolArgs = cast;
+                } else {
+                    throw new McpError(McpError.INVALID_PARAMS, "'arguments' must be an object");
+                }
 
                 // ── Circuit breaker for external tools ──
                 String cbCheck = checkCircuitBreaker(toolName, correlationId, startTime);
@@ -385,6 +442,12 @@ public class McPServer extends NanoHTTPD {
 
     public boolean isRunning() { return isAlive(); }
     public long getRequestCount() { return requestCount.get(); }
+    public long getRejectedCount() { return boundedRunner.getRejectedCount(); }
+    @Override
+    public void stop() {
+        try { boundedRunner.shutdown(); } catch (Exception ignored) {}
+        super.stop();
+    }
     public PermissionManager getPermissions() { return permissions; }
     public MetricsCollector getMetrics() { return metrics; }
     public ConcurrentHashMap<String, CircuitBreaker> getCircuitBreakers() { return circuitBreakers; }
@@ -422,13 +485,28 @@ public class McPServer extends NanoHTTPD {
 
     // ── Misc helpers ──
 
-    private String extractClientIp(IHTTPSession session) {
-        Map<String, String> h = session.getHeaders();
-        String xff = null;
-        for (Map.Entry<String, String> e : h.entrySet()) {
-            if (e.getKey().equalsIgnoreCase("x-forwarded-for")) { xff = e.getValue(); break; }
+    private synchronized void ensureRateLimiter() {
+        int configured = config.getRateLimitPerMinute();
+        if (rateLimiter == null) {
+            rateLimiter = new RateLimiter(configured);
+        } else {
+            // Refresh without losing buckets when unchanged is handled inside;
+            // updateRateLimit clears state only on actual change.
+            // Read current via try/catch to avoid adding a getter for now.
+            rateLimiter.updateRateLimit(configured);
         }
-        if (xff != null) return xff.split(",")[0].trim();
+    }
+
+    private static boolean constantTimeEquals(String a, String b) {
+        return MessageDigest.isEqual(
+                a.getBytes(StandardCharsets.UTF_8),
+                b.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String extractClientIp(IHTTPSession session) {
+        // Do not trust X-Forwarded-For: unauthenticated clients can spoof it
+        // to evade per-IP rate limiting or pollute the bucket table.
+        // Burp sits directly behind the MCP client, so the socket IP is authoritative.
         return session.getRemoteIpAddress() != null ? session.getRemoteIpAddress() : "127.0.0.1";
     }
 

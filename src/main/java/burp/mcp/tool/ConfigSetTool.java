@@ -36,7 +36,7 @@ public class ConfigSetTool implements Tool {
 
         ObjectNode props = McpJson.createObjectNode();
         props.set("scope", McpJson.property("string", "Config scope: 'project' (default) or 'user'", "project"));
-        props.set("config_json", McpJson.property("string", "JSON string of configuration options (from config_get or equivalent)", "project"));
+        props.set("config_json", McpJson.property("string", "JSON string of configuration options (from config_get or equivalent)", ""));
         schema.set("properties", props);
 
         ArrayNode required = McpJson.createArrayNode();
@@ -61,6 +61,12 @@ public class ConfigSetTool implements Tool {
         String configJson = (String) args.get("config_json");
         if (configJson == null || configJson.isEmpty()) {
             throw new McpError(McpError.INVALID_PARAMS, "'config_json' is required");
+        }
+        try {
+            McpJson.mapper().readTree(configJson);
+        } catch (Exception e) {
+            throw new McpError(McpError.INVALID_PARAMS,
+                    "'config_json' must be valid JSON: " + e.getMessage());
         }
 
         try {

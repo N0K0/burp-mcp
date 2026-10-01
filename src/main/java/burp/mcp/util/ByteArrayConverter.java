@@ -27,8 +27,12 @@ public class ByteArrayConverter {
      */
     public static byte[] fromHex(String hex) {
         if (hex == null || hex.isEmpty()) return new byte[0];
+        if (hex.length() % 2 != 0) {
+            throw new IllegalArgumentException("Invalid hex string: odd length");
+        }
         if (!HEX_PATTERN.matcher(hex).matches()) {
-            throw new IllegalArgumentException("Invalid hex string: " + hex);
+            String preview = hex.length() > 64 ? hex.substring(0, 64) + "..." : hex;
+            throw new IllegalArgumentException("Invalid hex string: " + preview);
         }
         return HEX.parseHex(hex);
     }
@@ -42,19 +46,13 @@ public class ByteArrayConverter {
     }
 
     /**
-     * Convert bytes to a string using UTF-8 encoding.
-     * Falls back to latin-1 for non-UTF8 data.
+     * Convert bytes to a string using UTF-8 decoding.
+     * Invalid sequences become U+FFFD replacements (String decoding
+     * never throws); use {@link #bytesToHex(byte[])} for binary data.
      */
     public static String bytesToString(byte[] data) {
         if (data == null) return "";
-        try {
-            // Check if valid UTF-8
-            new String(data, StandardCharsets.UTF_8);
-            return new String(data, StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            // Fall back to latin-1 which never fails
-            return new String(data, java.nio.charset.StandardCharsets.ISO_8859_1);
-        }
+        return new String(data, StandardCharsets.UTF_8);
     }
 
     /**

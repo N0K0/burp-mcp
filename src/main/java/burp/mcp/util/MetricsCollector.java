@@ -26,6 +26,7 @@ public class MetricsCollector {
 
     // Rolling rate: array of counts per second, index = current second % 60
     private final long[] rateSlots = new long[RATE_SLOTS];
+    private final Object rateLock = new Object();
     private volatile int currentRateSlot = 0;
     private volatile long lastRateSlotRoll = System.currentTimeMillis();
 
@@ -45,21 +46,46 @@ public class MetricsCollector {
     // Active connections
     private volatile int activeConnections = 0;
 
+    // Server-busy rejections (connection cap / saturated pool)
+    private final LongAdder serverBusyCount = new LongAdder();
+
+    // Master switch for the metrics_enabled preference
+    private volatile boolean enabled = true;
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
     public void recordRequest() {
-        totalRequests.increment();
-        rollRateSlot();
-        rateSlots[currentRateSlot]++;
+        if (!enabled) return;
+        synchronized (rateLock) {
+            totalRequests.increment();
+            rollRateSlot();
+            rateSlots[currentRateSlot]++;
+        }
     }
 
     public void recordError() {
+        if (!enabled) return;
         errorCount.increment();
     }
 
     public void recordRateLimited() {
+        if (!enabled) return;
         rateLimitedCount.increment();
     }
 
+    public void recordServerBusy() {
+        if (!enabled) return;
+        serverBusyCount.increment();
+    }
+
     public void recordLatencyMs(long ms) {
+        if (!enabled) return;
         synchronized (latencyLock) {
             latencyRing[latencyWritePos % LATENCY_RING_SIZE] = ms;
             latencyWritePos++;
@@ -68,6 +94,7 @@ public class MetricsCollector {
     }
 
     public void recordToolCall(String toolName) {
+        if (!enabled) return;
         toolCounts.computeIfAbsent(toolName, k -> new LongAdder()).increment();
     }
 
@@ -96,16 +123,21 @@ public class MetricsCollector {
         return rateLimitedCount.sum();
     }
 
+    public long getServerBusyCount() {
+        return serverBusyCount.sum();
+    }
+
     public long getRequestsPerMinute() {
-        long now = System.currentTimeMillis();
-        long windowEnd = currentRateSlot;
-        long count = 0;
-        // Sum last 60 seconds worth of slots, walking backward
-        for (int i = 0; i < RATE_SLOTS; i++) {
-            int idx = (int) ((windowEnd - i + RATE_SLOTS) % RATE_SLOTS);
-            count += rateSlots[idx];
+        synchronized (rateLock) {
+            rollRateSlot();
+            long count = 0;
+            // Sum last 60 seconds worth of slots, walking backward
+            for (int i = 0; i < RATE_SLOTS; i++) {
+                int idx = (int) ((currentRateSlot - i + RATE_SLOTS) % RATE_SLOTS);
+                count += rateSlots[idx];
+            }
+            return count;
         }
-        return count;
     }
 
     public double getAvgLatencyMs() {
@@ -158,6 +190,7 @@ public class MetricsCollector {
         m.put("requests_per_minute", getRequestsPerMinute());
         m.put("error_count", getErrorCount());
         m.put("rate_limited_count", getRateLimitedCount());
+        m.put("server_busy_count", getServerBusyCount());
         m.put("avg_latency_ms", Math.round(getAvgLatencyMs() * 100.0) / 100.0);
         m.put("p50_latency_ms", getPercentileMs(50));
         m.put("p95_latency_ms", getPercentileMs(95));
@@ -192,6 +225,10 @@ public class MetricsCollector {
         sb.append("# HELP burp_mcp_rate_limited_total Total rate-limited requests\n");
         sb.append("# TYPE burp_mcp_rate_limited_total counter\n");
         sb.append("burp_mcp_rate_limited_total ").append(getRateLimitedCount()).append("\n");
+
+        sb.append("# HELP burp_mcp_server_busy_total Total server-busy rejections\n");
+        sb.append("# TYPE burp_mcp_server_busy_total counter\n");
+        sb.append("burp_mcp_server_busy_total ").append(getServerBusyCount()).append("\n");
 
         sb.append("# HELP burp_mcp_latency_p95_ms P95 latency in ms\n");
         sb.append("# TYPE burp_mcp_latency_p95_ms gauge\n");

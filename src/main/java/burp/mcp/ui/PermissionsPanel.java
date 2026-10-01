@@ -70,7 +70,7 @@ public class PermissionsPanel extends JPanel {
         topPanel.add(new JLabel("Mode:"), g);
         g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.HORIZONTAL;
         presetCombo = new JComboBox<>(new String[]{"Read-Write (all tools)", "Read-Only (query/list/decode)", "Custom"});
-        presetCombo.setSelectedIndex(permissions.getLevel().ordinal());
+        presetCombo.setSelectedIndex(indexForLevel(permissions.getLevel()));
         presetCombo.addActionListener(e -> applyPreset());
         topPanel.add(presetCombo, g);
 
@@ -156,8 +156,10 @@ public class PermissionsPanel extends JPanel {
         bottom.add(btnPnl, BorderLayout.NORTH);
 
         add(topPanel, BorderLayout.NORTH);
-        add(quickPanel, BorderLayout.CENTER);
-        add(treeScroll, BorderLayout.CENTER);
+        JPanel centerPanel = new JPanel(new BorderLayout());
+        centerPanel.add(quickPanel, BorderLayout.NORTH);
+        centerPanel.add(treeScroll, BorderLayout.CENTER);
+        add(centerPanel, BorderLayout.CENTER);
         add(bottom, BorderLayout.SOUTH);
 
         updateSummary();
@@ -266,8 +268,7 @@ public class PermissionsPanel extends JPanel {
     }
 
     private void applyPermissions() {
-        int idx = presetCombo.getSelectedIndex();
-        PermissionManager.Level level = PermissionManager.Level.values()[Math.min(idx, 2)];
+        PermissionManager.Level level = levelForIndex(presetCombo.getSelectedIndex());
         permissions.setLevel(level);
         permissions.setBlockSensitive(sensitivityCheck.isSelected());
 
@@ -291,6 +292,24 @@ public class PermissionsPanel extends JPanel {
 
     private static boolean isProOnly(String toolName) {
         return toolName.startsWith("scanner_") || toolName.startsWith("collaborator_");
+    }
+
+    // Combo order is Read-Write, Read-Only, Custom — deliberately not
+    // Level.ordinal() (which is READ_ONLY, READ_WRITE, CUSTOM).
+    private static int indexForLevel(PermissionManager.Level level) {
+        return switch (level) {
+            case READ_WRITE -> 0;
+            case READ_ONLY -> 1;
+            case CUSTOM -> 2;
+        };
+    }
+
+    private static PermissionManager.Level levelForIndex(int idx) {
+        return switch (idx) {
+            case 0 -> PermissionManager.Level.READ_WRITE;
+            case 1 -> PermissionManager.Level.READ_ONLY;
+            default -> PermissionManager.Level.CUSTOM;
+        };
     }
 
     static class ToolInfo {

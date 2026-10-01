@@ -13,7 +13,9 @@ import java.util.Set;
  *   CUSTOM     — per-tool enable/disable via the enabledTools set
  *
  * Sensitivity gate: when blockSensitive is true, tools tagged as sensitive
- * are denied regardless of mode (except when explicitly allowed in CUSTOM mode).
+ * are denied regardless of mode. In CUSTOM mode an explicit allow still
+ * does not bypass the sensitivity gate — disable sensitivity blocking
+ * in the Permissions tab to use these tools.
  */
 public class PermissionManager {
 
@@ -34,15 +36,17 @@ public class PermissionManager {
     /** Tools that only read/query — safe for READ_ONLY mode. */
     private static final Set<String> READ_TOOLS = Set.of(
         "burp_info",
-        "sitemap_list", "sitemap_list_filtered", "sitemap_get",
+        "burp_metrics",
+        "sitemap_list", "sitemap_list_filtered", "sitemap_get", "sitemap_search",
         "proxy_history_list", "proxy_history_get", "proxy_websocket_history_list",
+        "websocket_history_get",
         "proxy_intercept_status",
-        "scope_check",
+        "scope_check", "scope_list",
         "cookie_list",
         "decoder_decode", "decoder_encode",
         "http_parse_request", "http_parse_response",
         "http_get_request",
-        "config_get",
+        "config_get", "config_list_preferences",
         "scanner_issues_list", "scanner_issues_list_filtered", "scanner_get_issue",
         "collaborator_interactions",
         "http_diff_responses", "http_keyword_search"

@@ -10,12 +10,13 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class RateLimiter {
 
-    private final int rateLimitPerMinute;
-    private final int burstSize;
+    private volatile int rateLimitPerMinute;
+    private volatile int burstSize;
     private final ConcurrentHashMap<String, Bucket> buckets = new ConcurrentHashMap<>();
     private volatile long lastCleanup = System.currentTimeMillis();
     private static final long CLEANUP_INTERVAL_MS = 60_000;
     private static final long IDLE_EXPIRE_MS = 5 * 60_000;
+    private static final int MAX_BUCKETS = 10_000;
 
     public RateLimiter(int rateLimitPerMinute) {
         this.rateLimitPerMinute = rateLimitPerMinute;
@@ -24,14 +25,27 @@ public class RateLimiter {
 
     /**
      * Try to consume a token. Returns seconds until next token available (0 = allowed).
+     * A configured limit of 0 or less disables rate limiting.
      */
     public synchronized long tryConsume(String ip) {
+        if (rateLimitPerMinute <= 0) {
+            return 0;
+        }
         cleanupIfNeeded();
+        if (buckets.size() >= MAX_BUCKETS && !buckets.containsKey(ip)) {
+            // Fail open when bucket table is full rather than growing without bound.
+            return 0;
+        }
         Bucket bucket = buckets.computeIfAbsent(ip, k -> new Bucket());
         return bucket.tryConsume();
     }
 
-    public void updateRateLimit(int newRate) {
+    public synchronized void updateRateLimit(int newRate) {
+        if (newRate == this.rateLimitPerMinute) {
+            return;
+        }
+        this.rateLimitPerMinute = newRate;
+        this.burstSize = Math.max(1, newRate / 10);
         // Clear state on rate change
         buckets.clear();
     }
@@ -59,6 +73,9 @@ public class RateLimiter {
 
             if (tokens >= 1.0) {
                 tokens -= 1.0;
+                return 0;
+            }
+            if (rateLimitPerMinute <= 0) {
                 return 0;
             }
             // Return seconds until next token

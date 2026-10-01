@@ -53,7 +53,14 @@ public class SitemapSearchTool implements Tool {
     public Object execute(Map<String, Object> args) {
         String patternStr = args.get("pattern") instanceof String s ? s : "";
         if (patternStr.isEmpty()) throw new McpError(McpError.INVALID_PARAMS, "pattern is required");
+        if (patternStr.length() > 2000) {
+            throw new McpError(McpError.INVALID_PARAMS, "pattern must not exceed 2000 characters");
+        }
         int limit = args.get("limit") instanceof Number n ? n.intValue() : 500;
+        if (limit <= 0) {
+            throw new McpError(McpError.INVALID_PARAMS, "'limit' must be a positive integer");
+        }
+        if (limit > 5000) limit = 5000;
 
         Pattern pattern;
         try {

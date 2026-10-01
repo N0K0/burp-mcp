@@ -80,12 +80,17 @@ public class McpJson {
         try {
             return MAPPER.writeValueAsString(obj);
         } catch (JsonProcessingException e) {
-            return JsonRpcError.error(
-                    McpError.INTERNAL_ERROR,
-                    "Failed to serialize response: " + e.getMessage(),
-                    null,
-                    null
-            ).toString();
+            // Never return Java toString() here — callers send this straight
+            // to the client as JSON. Fall back to a minimal static payload.
+            String msg = e.getMessage() == null ? "serialization failed"
+                    : e.getMessage().replace("\"", "'").replace("\n", " ");
+            if (msg.length() > 200) {
+                msg = msg.substring(0, 200) + "...";
+            }
+            return "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":"
+                    + McpError.INTERNAL_ERROR
+                    + ",\"message\":\"Failed to serialize response: "
+                    + msg + "\"},\"id\":null}";
         }
     }
 
@@ -147,7 +152,10 @@ public class McpJson {
         if (schema == null || !schema.has("properties")) {
             return "{ }";
         }
-        ObjectNode props = (ObjectNode) schema.get("properties");
+        com.fasterxml.jackson.databind.JsonNode propsNode = schema.get("properties");
+        if (!(propsNode instanceof ObjectNode props)) {
+            return "{ }";
+        }
         var fields = props.fields();
         while (fields.hasNext()) {
             var field = fields.next();

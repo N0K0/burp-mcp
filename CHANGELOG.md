@@ -2,7 +2,28 @@
 
 All notable changes to the Burp MCP Server plugin.
 
-## [1.1.0] — 2026-05-28
+## [Unreleased]
+
+### Fixed
+- Permission drift: `scope_list`, `sitemap_search`, `config_list_preferences`, `websocket_history_get`, and `burp_metrics` are now read-only tools
+- Alias bypass: permission checks use the canonical tool name, so disabling a tool also disables its aliases
+- Auth bypass when no token is configured; token comparison is now constant-time
+- Rate limit of 0 permanently returning 429; it now correctly disables limiting
+- Request cache crashing init on TTL 0 and leaking its cleanup thread on reload
+- `McpJson.toJson` returning non-JSON on serialization failure
+- ToolTester and MessageViewer blocking the Swing EDT on slow operations
+- Settings export writing a trailing comma and dropping `tls_keystore_path`
+- Permissions panel preset inversion and hidden quick/filter bar
+- Schema defaults: `config_json`, request `body`, cookie `expiration`, missing `request_id` requirement
+
+### Added
+- Enforced `max_connections_per_ip` (HTTP 503 + `-32007`) with a live active-connections gauge
+- Bounded worker pool honoring `thread_pool_size` / `max_queue_size`
+- `metrics_enabled` and `cache_enabled` now take effect instead of being ignored
+- Input validation wired into HTTP, scanner, scope, cookie, collaborator, sitemap, and config tools
+- Symmetric, char-boundary-safe body truncation for requests and audit issues
+
+## [1.1.0] - 2026-06-01
 
 ### Added
 - **Structured Logging:** `LogEntry` record with ISO 8601 timestamps, log levels, correlation IDs, and JSON-lines output to disk
@@ -13,12 +34,12 @@ All notable changes to the Burp MCP Server plugin.
 - **Rate Limiting:** Token-bucket rate limiter keyed by source IP with `rate_limit_per_minute` (default 100) and 10% burst; returns HTTP 429 with Retry-After header
 - **Circuit Breaker:** For external-calling tools (http_send_*, scanner_start_*, collaborator_*); opens after 5 consecutive failures in 60s, half-open probe after 30s
 - **New Tools:** `burp_metrics`, `config_list_preferences`, `sitemap_search` (regex full-text), `scope_list`; tool aliases (`proxy_list`→`proxy_history_list`, `send_request`→`http_send_request`, etc.)
-- **UI — Dashboard:** StatusPanel now shows uptime, req/min, P95 latency, error count, rate-limited count
-- **UI — Log Filtering:** Level filter dropdown (ALL/INFO/WARN/ERROR/DEBUG), real-time search with highlighting, auto-scroll toggle, export button
-- **UI — Settings:** Inline validation (red border on invalid fields), logical group separators (Server/Limits/Features/Logging/Security), export/import config as JSON
-- **UI — ToolTester:** Split-view (args/result side-by-side), invocation history dropdown, Copy cURL, Share as markdown, Format JSON button, visual error treatment
-- **UI — Permissions:** Presets dropdown (Read-Write/Read-Only/Custom), tool count summary, search/filter bar, lock icons for sensitive tools, Select All Read/Write buttons, status bar
-- **UI — McpColors:** Shared color palette and font constants for consistent styling across all panels
+- **UI dashboard:** StatusPanel now shows uptime, req/min, P95 latency, error count, rate-limited count
+- **UI log filtering:** Level filter dropdown (ALL/INFO/WARN/ERROR/DEBUG), real-time search with highlighting, auto-scroll toggle, export button
+- **UI settings:** Inline validation (red border on invalid fields), logical group separators (Server/Limits/Features/Logging/Security), export/import config as JSON
+- **UI ToolTester:** Split-view (args/result side-by-side), invocation history dropdown, Copy cURL, Share as markdown, Format JSON button, visual error treatment
+- **UI permissions:** Presets dropdown (Read-Write/Read-Only/Custom), tool count summary, search/filter bar, lock icons for sensitive tools, Select All Read/Write buttons, status bar
+- **UI McpColors:** Shared color palette and font constants for consistent styling across all panels
 - **Input Validation:** `InputValidator` utility for URLs, file paths, cookies, and Collaborator data
 - **Error Translation:** McpServer maps `ConnectException`, `SocketTimeoutException`, `UnknownHostException`, `SSLException`, and `IllegalArgumentException` to meaningful MCP error codes
 - **Cache Improvements:** RequestCache now has LRU eviction (max 1000 entries), hit/miss/eviction stats, `cache_enabled` preference
@@ -36,7 +57,7 @@ All notable changes to the Burp MCP Server plugin.
 - Inline validation in SettingsPanel catches invalid port numbers and numeric ranges before save
 - Log area auto-truncates at 10,000 lines to prevent UI memory leaks
 
-## [1.0.0] — 2026-05-28
+## [1.0.0] - 2026-05-28
 
 ### Added
 - Initial release with ~40 MCP tools covering HTTP, sitemap, proxy, scope, decoder, repeater, intruder, comparer, cookie, scanner (Pro), collaborator (Pro), config, and logger

@@ -250,8 +250,19 @@ public class SettingsPanel extends JPanel {
             cfg.setTlsKeystorePath(tlsKeystorePathField.getText().trim());
             cfg.setTlsKeystorePassword(new String(tlsKeystorePasswordField.getPassword()));
 
-            statusLabel.setText("Settings saved.");
-            statusLabel.setForeground(McpColors.GREEN);
+            java.util.List<String> errors = cfg.validate();
+            try {
+                McpConfig.getRequestCache().setEnabled(cfg.isCacheEnabled());
+            } catch (IllegalStateException ignored) {
+                // Cache not initialized yet; startup wiring applies the flag.
+            }
+            if (!errors.isEmpty()) {
+                statusLabel.setText("Saved with warnings: " + String.join("; ", errors));
+                statusLabel.setForeground(McpColors.AMBER);
+            } else {
+                statusLabel.setText("Settings saved.");
+                statusLabel.setForeground(McpColors.GREEN);
+            }
         } catch (NumberFormatException ex) {
             statusLabel.setText("Error: invalid number format.");
             statusLabel.setForeground(McpColors.RED);
@@ -291,30 +302,30 @@ public class SettingsPanel extends JPanel {
         if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
             try (FileWriter fw = new FileWriter(chooser.getSelectedFile())) {
                 McpConfig cfg = McpConfig.getInstance();
-                StringBuilder sb = new StringBuilder();
-                sb.append("{\n");
-                putJson(sb, "mcp_port", cfg.getPort());
-                putJson(sb, "bind_address", cfg.getBindAddress());
-                putJson(sb, "thread_pool_size", cfg.getThreadPoolSize());
-                putJson(sb, "max_queue_size", cfg.getMaxQueueSize());
-                putJson(sb, "max_response_body_bytes", cfg.getMaxResponseBodyBytes());
-                putJson(sb, "max_sitemap_entries", cfg.getMaxSitemapEntries());
-                putJson(sb, "request_timeout_ms", cfg.getRequestTimeoutMs());
-                putJson(sb, "cache_ttl_seconds", cfg.getCacheTtlSeconds());
-                putJson(sb, "rate_limit_per_minute", cfg.getRateLimitPerMinute());
-                putJson(sb, "max_connections_per_ip", cfg.getMaxConnectionsPerIp());
-                putJson(sb, "log_level", cfg.getLogLevel());
-                putJson(sb, "logging_file_path", cfg.getLoggingFilePath());
-                putJson(sb, "include_request_body", cfg.isIncludeRequestBody());
-                putJson(sb, "include_response_body", cfg.isIncludeResponseBody());
-                putJson(sb, "metrics_enabled", cfg.isMetricsEnabled());
-                putJson(sb, "cache_enabled", cfg.isCacheEnabled());
-                putJson(sb, "auth_enabled", cfg.isAuthEnabled());
-                putJson(sb, "tls_enabled", cfg.isTlsEnabled());
-                putJson(sb, "tls_mode", cfg.getTlsMode());
-                sb.append("}\n");
-                fw.write(sb.toString());
-                statusLabel.setText("Config exported.");
+                java.util.List<String> lines = new java.util.ArrayList<>();
+                lines.add(jsonLine("mcp_port", cfg.getPort()));
+                lines.add(jsonLine("bind_address", cfg.getBindAddress()));
+                lines.add(jsonLine("thread_pool_size", cfg.getThreadPoolSize()));
+                lines.add(jsonLine("max_queue_size", cfg.getMaxQueueSize()));
+                lines.add(jsonLine("max_response_body_bytes", cfg.getMaxResponseBodyBytes()));
+                lines.add(jsonLine("max_sitemap_entries", cfg.getMaxSitemapEntries()));
+                lines.add(jsonLine("request_timeout_ms", cfg.getRequestTimeoutMs()));
+                lines.add(jsonLine("cache_ttl_seconds", cfg.getCacheTtlSeconds()));
+                lines.add(jsonLine("rate_limit_per_minute", cfg.getRateLimitPerMinute()));
+                lines.add(jsonLine("max_connections_per_ip", cfg.getMaxConnectionsPerIp()));
+                lines.add(jsonLine("log_level", cfg.getLogLevel()));
+                lines.add(jsonLine("logging_file_path", cfg.getLoggingFilePath()));
+                lines.add(jsonLine("include_request_body", cfg.isIncludeRequestBody()));
+                lines.add(jsonLine("include_response_body", cfg.isIncludeResponseBody()));
+                lines.add(jsonLine("metrics_enabled", cfg.isMetricsEnabled()));
+                lines.add(jsonLine("cache_enabled", cfg.isCacheEnabled()));
+                lines.add(jsonLine("auth_enabled", cfg.isAuthEnabled()));
+                lines.add(jsonLine("tls_enabled", cfg.isTlsEnabled()));
+                lines.add(jsonLine("tls_mode", cfg.getTlsMode()));
+                lines.add(jsonLine("tls_keystore_path", cfg.getTlsKeystorePath()));
+                // Secrets (auth_token, tls_keystore_password) are deliberately omitted.
+                fw.write("{\n" + String.join(",\n", lines) + "\n}\n");
+                statusLabel.setText("Config exported (secrets omitted).");
                 statusLabel.setForeground(McpColors.GREEN);
             } catch (IOException ex) {
                 statusLabel.setText("Export failed: " + ex.getMessage());
@@ -361,6 +372,19 @@ public class SettingsPanel extends JPanel {
     private static void putJson(StringBuilder sb, String key, String val) { sb.append("  \"").append(key).append("\": \"").append(val).append("\",\n"); }
     private static void putJson(StringBuilder sb, String key, int val) { sb.append("  \"").append(key).append("\": ").append(val).append(",\n"); }
     private static void putJson(StringBuilder sb, String key, boolean val) { sb.append("  \"").append(key).append("\": ").append(val).append(",\n"); }
+
+    private static String jsonLine(String key, String val) {
+        String safe = val == null ? "" : val.replace("\\", "\\\\").replace("\"", "\\\"");
+        return "  \"" + key + "\": \"" + safe + "\"";
+    }
+
+    private static String jsonLine(String key, int val) {
+        return "  \"" + key + "\": " + val;
+    }
+
+    private static String jsonLine(String key, boolean val) {
+        return "  \"" + key + "\": " + val;
+    }
 
     private JTextField addRow(JPanel p, GridBagConstraints gbc, int row, String label, String value, String hint) {
         gbc.gridy = row; gbc.gridx = 0; gbc.weightx = 0;

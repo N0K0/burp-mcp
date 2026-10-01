@@ -19,6 +19,9 @@ import java.util.Map;
  */
 public class HttpSendRequestsTool implements Tool {
 
+    /** Max requests per batch: bounds parallel fan-out (DoS/SSRF amplifier). */
+    private static final int MAX_BATCH_REQUESTS = 20;
+
     private final MontoyaApi api;
 
     public HttpSendRequestsTool(MontoyaApi api) {
@@ -63,10 +66,19 @@ public class HttpSendRequestsTool implements Tool {
             throw new McpError(McpError.INVALID_PARAMS,
                     "'requests' array must not be empty");
         }
+        if (requestList.size() > MAX_BATCH_REQUESTS) {
+            throw new McpError(McpError.INVALID_PARAMS,
+                    "'requests' array must not exceed " + MAX_BATCH_REQUESTS + " entries");
+        }
 
         List<HttpRequest> requests = new ArrayList<>();
         for (int i = 0; i < requestList.size(); i++) {
-            String rawRequest = String.valueOf(requestList.get(i));
+            Object item = requestList.get(i);
+            if (!(item instanceof String)) {
+                throw new McpError(McpError.INVALID_PARAMS,
+                        "Item at index " + i + " must be a raw HTTP request string");
+            }
+            String rawRequest = (String) item;
             try {
                 requests.add(HttpRequest.httpRequest(rawRequest));
             } catch (Exception e) {

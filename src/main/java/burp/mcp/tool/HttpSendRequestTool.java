@@ -5,6 +5,7 @@ import burp.api.montoya.http.RedirectionMode;
 import burp.api.montoya.http.RequestOptions;
 import burp.api.montoya.http.message.requests.HttpRequest;
 import burp.mcp.util.HttpMessageSerializer;
+import burp.mcp.util.InputValidator;
 import burp.mcp.util.McpConfig;
 import burp.mcp.util.McpError;
 import burp.mcp.util.McpJson;
@@ -67,6 +68,10 @@ public class HttpSendRequestTool implements Tool {
                         "Failed to parse raw HTTP request: " + e.getMessage());
             }
         } else if (url != null && !url.isEmpty()) {
+            String urlError = InputValidator.validateUrl(url, "'url'");
+            if (urlError != null) {
+                throw new McpError(McpError.INVALID_PARAMS, urlError);
+            }
             request = HttpRequest.httpRequestFromUrl(url);
         } else {
             throw new McpError(McpError.INVALID_PARAMS,
@@ -88,10 +93,12 @@ public class HttpSendRequestTool implements Tool {
             options = options.withRedirectionMode(RedirectionMode.NEVER);
         }
 
-        // Handle timeout
+        // Handle timeout (clamped to the configured valid range)
         Object timeoutObj = args.get("timeout_ms");
         if (timeoutObj instanceof Number) {
             long timeoutMs = ((Number) timeoutObj).longValue();
+            if (timeoutMs < 1000) timeoutMs = 1000;
+            if (timeoutMs > 300_000) timeoutMs = 300_000;
             options = options.withResponseTimeout(timeoutMs);
         } else {
             long defaultTimeout = McpConfig.getInstance().getRequestTimeoutMs();

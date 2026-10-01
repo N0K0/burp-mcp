@@ -75,7 +75,14 @@ public class ScannerStartAuditTool extends ScannerBase implements Tool {
                     "At least one URL must be provided via 'url' or 'urls'");
         }
 
-        // Determine config
+        for (String u : urls) {
+            String urlError = burp.mcp.util.InputValidator.validateUrl(u, "'url'");
+            if (urlError != null) {
+                throw new McpError(McpError.INVALID_PARAMS, urlError);
+            }
+        }
+
+        // Determine config (unknown names are rejected, never silently escalated)
         String configName = (String) args.get("config");
         if (configName == null || configName.isEmpty()) {
             configName = "LEGACY_ACTIVE_AUDIT_CHECKS";
@@ -87,9 +94,11 @@ public class ScannerStartAuditTool extends ScannerBase implements Tool {
                 config = BuiltInAuditConfiguration.LEGACY_PASSIVE_AUDIT_CHECKS;
                 break;
             case "LEGACY_ACTIVE_AUDIT_CHECKS":
-            default:
                 config = BuiltInAuditConfiguration.LEGACY_ACTIVE_AUDIT_CHECKS;
                 break;
+            default:
+                throw new McpError(McpError.INVALID_PARAMS,
+                        "'config' must be one of: LEGACY_ACTIVE_AUDIT_CHECKS, LEGACY_PASSIVE_AUDIT_CHECKS");
         }
 
         // Start audit

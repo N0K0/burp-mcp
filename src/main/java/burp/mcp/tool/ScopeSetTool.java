@@ -55,6 +55,10 @@ public class ScopeSetTool implements Tool {
         if (url == null || url.isEmpty()) {
             throw new McpError(McpError.INVALID_PARAMS, "'url' is required");
         }
+        String urlError = burp.mcp.util.InputValidator.validateUrl(url, "'url'");
+        if (urlError != null) {
+            throw new McpError(McpError.INVALID_PARAMS, urlError);
+        }
         if (action == null || action.isEmpty()) {
             throw new McpError(McpError.INVALID_PARAMS, "'action' is required");
         }

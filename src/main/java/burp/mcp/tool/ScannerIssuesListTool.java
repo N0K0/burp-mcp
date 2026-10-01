@@ -48,6 +48,7 @@ public class ScannerIssuesListTool extends ScannerBase implements Tool {
 
     @Override
     public Object execute(Map<String, Object> args) {
+        checkProEdition();
         int limit = 500;
         Object limitObj = args.get("limit");
         if (limitObj instanceof Number) {

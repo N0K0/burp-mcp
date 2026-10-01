@@ -1,20 +1,20 @@
 # AGENTS.md
 
-Burp Suite MCP Server — Java extension exposing Montoya API as MCP tools.  
+Burp Suite MCP Server, a Java extension exposing the Montoya API as MCP tools.
 AI agents (you) call these tools to interact with Burp programmatically.
 
 ## Build
 
 ```bash
-cd /home/n/burp-mcp
+cd /home/nikolas/git/burp-mcp
 mvn clean compile          # compile only
-mvn test                   # run 41 JUnit 5 + AssertJ tests
+mvn test                   # run 67 JUnit 5 + AssertJ tests
 mvn clean package -DskipTests  # build fat JAR → C:\Users\nikolas\Downloads\
 ```
 
 Java 17+, Maven 3.9+. WSL builds, Windows host runs Burp.
 
-## Project Structure
+## Project structure
 
 ```
 src/main/java/burp/mcp/
@@ -58,18 +58,18 @@ src/test/java/burp/mcp/
 └── util/{McpJsonTest, McpErrorTest, PermissionManagerTest}.java
 ```
 
-## How to Add a Tool
+## How to add a tool
 
 1. Create `src/main/java/burp/mcp/tool/NewTool.java` implementing `Tool`
 2. Implement `definition()`, `inputSchema()`, `execute(Map<String,Object>)`
-3. **Every parameter must use `McpJson.property(type, description)`** — never bare `put("param", "string")`
-4. **`required` must be `McpJson.createArrayNode()`** — never `createObjectNode()`. DeepSeek rejects `"required": {}` with HTTP 400
+3. **Every parameter must use `McpJson.property(type, description)`**: never bare `put("param", "string")`
+4. **`required` must be `McpJson.createArrayNode()`**: never `createObjectNode()`. DeepSeek rejects `"required": {}` with HTTP 400
 5. **Scanner/Collaborator tools must extend `ScannerBase`** and call `checkProEdition()` as the first line of `execute()`
 6. Register in `McpToolRegistry.registerAllTools()`
 7. Add to `PermissionManager.isReadTool()` if it's a query-only tool
 8. Add to `PermissionManager.isSensitive()` if it modifies scope/config/scan state
 
-## Critical Montoya API Gotchas
+## Critical Montoya API gotchas
 
 These will silently fail or produce wrong behavior if you guess the wrong method name.
 
@@ -92,9 +92,9 @@ These will silently fail or produce wrong behavior if you guess the wrong method
 | `HttpRequestResponse.url()` | **Deprecated** — use `request().url()` | |
 | `bodyToString()` | `new String(body().getBytes(), UTF_8)` | |
 
-## Key Patterns
+## Key patterns
 
-### JSON Schema for Tool Parameters
+### JSON schema for tool parameters
 
 ```java
 ObjectNode props = McpJson.createObjectNode();
@@ -106,7 +106,7 @@ required.add("url");
 schema.set("required", required);
 ```
 
-### Error Handling in Tools
+### Error handling in tools
 
 ```java
 // For missing params
@@ -134,7 +134,7 @@ api.logging().logToError("error", throwable); // 2-arg prints stack trace
 ErrorLogger.log(context, throwable); // to ~/burp-mcp-error.log
 ```
 
-### Configuration Access
+### Configuration access
 
 ```java
 McpConfig cfg = McpConfig.getInstance();
@@ -145,36 +145,36 @@ String logLevel = cfg.getLogLevel(); // "INFO" default
 List<String> errors = cfg.validate();
 ```
 
-## UI Conventions
+## UI conventions
 
 - Panels are registered in `McpUiPanel` constructor, each wrapped in `SafePanel` (catches paint/layout NPEs)
 - StatusPanel gets the server reference via `setServer()` after server.start()
-- All colors through `McpColors` constants — no bare hex values
+- All colors through `McpColors` constants: no bare hex values
 - All fonts through `McpColors.LABEL_FONT` / `MONO_FONT` / `MONO_SMALL`
 - Tooltips on every setting field and button
 
 ## Testing
 
-- 41 tests: 26 unit + 15 integration
+- 67 tests: 50 unit + 17 integration
 - Integration tests start a real NanoHTTPD on a random free port
 - MontoyaApi is mocked via `java.lang.reflect.Proxy` (survives API version bumps)
 - Preferences use ConcurrentHashMap-backed in-memory store for test isolation
-- Always read error responses from `conn.getErrorStream()` — `getInputStream()` throws on 4xx/5xx
+- Always read error responses from `conn.getErrorStream()`. `getInputStream()` throws on 4xx/5xx
 
 ```bash
 mvn test  # all tests
 ```
 
-## Common Pitfalls
+## Common pitfalls
 
-1. **Shade plugin must exclude JAR signatures** — BouncyCastle's `.SF`/`.DSA`/`.RSA` become invalid after shading, Burp rejects the entire JAR. Exclude `META-INF/*.SF`, `*.DSA`, `*.RSA`, and `module-info.class` from all artifacts.
-2. **Thread.setDefaultUncaughtExceptionHandler is JVM-global** — survives extension reloads. Clear with a no-op lambda at the top of `initialize()`.
-3. **POST body reading** — read exactly `Content-Length` bytes, not until EOF (hangs on keep-alive). Do NOT use try-with-resources on `session.getInputStream()` (closes the socket).
-4. **Lambda variables must be final** — when filtering with client-side predicates, declare captured variables `final`.
-5. **Never block the EDT** — all HTTP and tool execution runs on NanoHTTPD's thread pool.
-6. **Montoya objects are immutable** — `with*()` methods return new instances. Capture the return value.
+1. **Shade plugin must exclude JAR signatures**: BouncyCastle's `.SF`/`.DSA`/`.RSA` become invalid after shading, Burp rejects the entire JAR. Exclude `META-INF/*.SF`, `*.DSA`, `*.RSA`, and `module-info.class` from all artifacts.
+2. **Thread.setDefaultUncaughtExceptionHandler is JVM-global**: survives extension reloads. Replace it at the top of `initialize()` with a handler that logs to `api.logging()` (never a silent no-op).
+3. **POST body reading**: read exactly `Content-Length` bytes, not until EOF (hangs on keep-alive). Do NOT use try-with-resources on `session.getInputStream()` (closes the socket).
+4. **Lambda variables must be final**: when filtering with client-side predicates, declare captured variables `final`.
+5. **Never block the EDT**: all HTTP and tool execution runs on NanoHTTPD's thread pool.
+6. **Montoya objects are immutable**: `with*()` methods return new instances. Capture the return value.
 
-## Preferences Reference
+## Preferences reference
 
 All persisted via `api.persistence().preferences()`. See `McpConfig.java` for defaults and getters/setters.
 

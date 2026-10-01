@@ -40,6 +40,7 @@ public class HttpGetRequestTool implements Tool {
         schema.set("properties", props);
 
         ArrayNode required = McpJson.createArrayNode();
+        required.add("request_id");
         schema.set("required", required);
 
         return schema;

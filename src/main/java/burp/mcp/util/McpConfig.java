@@ -47,20 +47,31 @@ public class McpConfig {
 
     // ── Environment variable overrides ──
 
-    static {
-        applyEnvOverrides();
-    }
-
-    private static void applyEnvOverrides() {
-        // Note: these are applied at class init time, before instance creation.
-        // Actual override happens via getter methods below.
-    }
+    // Documented overrides (see README): BURP_MCP_PORT, BURP_MCP_BIND_ADDRESS,
+    // BURP_MCP_AUTH_TOKEN, BURP_MCP_LOG_LEVEL. Env wins over stored prefs
+    // so containers and CI can configure without touching Burp preferences.
 
     private static String envOrDefault(String key, String defaultVal) {
         return System.getenv().getOrDefault(key, defaultVal);
     }
 
+    private static Integer envIntOrNull(String key) {
+        String v = System.getenv(key);
+        if (v == null || v.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(v.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     public int getPort() {
+        Integer env = envIntOrNull("BURP_MCP_PORT");
+        if (env != null) {
+            return env;
+        }
         Integer val = preferences.getInteger("mcp_port");
         return Objects.requireNonNullElse(val, DEFAULT_PORT);
     }
@@ -76,6 +87,10 @@ public class McpConfig {
     }
 
     public String getBindAddress() {
+        String env = System.getenv("BURP_MCP_BIND_ADDRESS");
+        if (env != null && !env.isBlank()) {
+            return env.trim();
+        }
         return Objects.requireNonNullElse(
                 preferences.getString("bind_address"),
                 DEFAULT_BIND_ADDRESS
@@ -160,8 +175,12 @@ public class McpConfig {
     private static final int DEFAULT_MAX_CONNECTIONS_PER_IP = 10;
 
     public String getLogLevel() {
+        String env = System.getenv("BURP_MCP_LOG_LEVEL");
+        if (env != null && !env.isBlank()) {
+            return env.trim().toUpperCase(java.util.Locale.ROOT);
+        }
         String val = preferences.getString("log_level");
-        return val != null ? val.toUpperCase() : DEFAULT_LOG_LEVEL;
+        return val != null ? val.toUpperCase(java.util.Locale.ROOT) : DEFAULT_LOG_LEVEL;
     }
 
     public void setLogLevel(String level) {
@@ -229,6 +248,10 @@ public class McpConfig {
     }
 
     public String getAuthToken() {
+        String env = System.getenv("BURP_MCP_AUTH_TOKEN");
+        if (env != null && !env.isEmpty()) {
+            return env;
+        }
         String val = preferences.getString("auth_token");
         return val != null ? val : "";
     }
@@ -319,13 +342,21 @@ public class McpConfig {
         if (getThreadPoolSize() < 1 || getThreadPoolSize() > 50) errors.add("Thread pool size must be 1-50");
         if (getMaxQueueSize() < 1 || getMaxQueueSize() > 1000) errors.add("Max queue size must be 1-1000");
         if (getMaxResponseBodyBytes() < 1000 || getMaxResponseBodyBytes() > 100_000_000) errors.add("Max response body bytes must be 1000-100,000,000");
+        if (getMaxSitemapEntries() <= 0) errors.add("Max sitemap entries must be > 0");
         if (getRequestTimeoutMs() < 1000 || getRequestTimeoutMs() > 300_000) errors.add("Request timeout must be 1000-300,000ms");
         if (getCacheTtlSeconds() < 0 || getCacheTtlSeconds() > 86400) errors.add("Cache TTL must be 0-86400 seconds");
         if (getRateLimitPerMinute() < 0 || getRateLimitPerMinute() > 10000) errors.add("Rate limit must be 0-10000 per minute");
         if (getMaxConnectionsPerIp() < 1 || getMaxConnectionsPerIp() > 100) errors.add("Max connections per IP must be 1-100");
+        String bind = getBindAddress();
+        if (bind == null || bind.isBlank()) errors.add("Bind address must not be empty");
         String logLevel = getLogLevel();
         if (!java.util.Set.of("DEBUG", "INFO", "WARN", "ERROR").contains(logLevel)) errors.add("Log level must be DEBUG/INFO/WARN/ERROR, got " + logLevel);
         if (isAuthEnabled() && getAuthToken().isEmpty()) errors.add("Auth token must not be empty when auth is enabled");
+        String tlsMode = getTlsMode();
+        if (!java.util.Set.of("self_signed", "custom").contains(tlsMode)) errors.add("TLS mode must be self_signed or custom, got " + tlsMode);
+        if (isTlsEnabled() && "custom".equals(tlsMode) && getTlsKeystorePath().isEmpty()) errors.add("TLS keystore path must not be empty in custom mode");
+        String logPath = getLoggingFilePath();
+        if (logPath != null && logPath.contains("..")) errors.add("Logging file path must not contain '..'");
         return errors;
     }
 }

@@ -34,6 +34,7 @@ public class ToolTesterPanel extends JPanel {
     private final JTextArea resultArea;
     private final JLabel statusLabel;
     private final JComboBox<String> historyCombo;
+    private final JButton invokeBtn;
 
     private final List<HistoryEntry> history = new ArrayList<>();
     private static final int MAX_HISTORY = 20;
@@ -100,7 +101,7 @@ public class ToolTesterPanel extends JPanel {
         formatBtn.addActionListener(e -> formatArgs());
         invokeBar.add(formatBtn);
 
-        JButton invokeBtn = new JButton("Invoke");
+        invokeBtn = new JButton("Invoke");
         invokeBtn.addActionListener(e -> invokeTool());
         invokeBar.add(invokeBtn);
 
@@ -218,32 +219,47 @@ public class ToolTesterPanel extends JPanel {
         statusLabel.setText("Invoking...");
         statusLabel.setForeground(McpColors.BLUE);
         resultArea.setBorder(UIManager.getBorder("TextArea.border"));
+        invokeBtn.setEnabled(false);
 
-        long start = System.currentTimeMillis();
-        try {
-            Object result = registry.callTool(toolName, args);
-            long elapsed = System.currentTimeMillis() - start;
-            String resultJson = McpJson.mapper().writerWithDefaultPrettyPrinter().writeValueAsString(result);
-            resultArea.setText(resultJson);
-            statusLabel.setText("OK — " + elapsed + "ms");
-            statusLabel.setForeground(McpColors.GREEN);
-            resultArea.setBorder(BorderFactory.createLineBorder(McpColors.GREEN, 1));
-            // Add to history
-            history.add(0, new HistoryEntry(toolName, argsText));
-            if (history.size() > MAX_HISTORY) history.remove(history.size() - 1);
-            rebuildHistory();
-        } catch (Exception e) {
-            long elapsed = System.currentTimeMillis() - start;
-            String msg = e.getMessage();
-            int code = -32603;
-            if (e instanceof burp.mcp.util.McpError me) code = me.getCode();
-            resultArea.setText("ERROR [" + code + "]: " + msg + "\n\nStack trace:\n" +
-                    java.util.Arrays.stream(e.getStackTrace()).limit(15)
-                            .map(StackTraceElement::toString).collect(Collectors.joining("\n")));
-            statusLabel.setText("ERROR [" + code + "] — " + elapsed + "ms");
-            statusLabel.setForeground(McpColors.RED);
-            resultArea.setBorder(BorderFactory.createLineBorder(McpColors.RED, 2));
-        }
+        final Map<String, Object> callArgs = args;
+        final long start = System.currentTimeMillis();
+        new SwingWorker<Object, Void>() {
+            @Override
+            protected Object doInBackground() throws Exception {
+                // Runs off the EDT so slow tools can't freeze the Burp UI.
+                return registry.callTool(toolName, callArgs);
+            }
+
+            @Override
+            protected void done() {
+                // Runs on the EDT — safe to touch Swing components.
+                invokeBtn.setEnabled(true);
+                long elapsed = System.currentTimeMillis() - start;
+                try {
+                    Object result = get();
+                    String resultJson = McpJson.mapper().writerWithDefaultPrettyPrinter().writeValueAsString(result);
+                    resultArea.setText(resultJson);
+                    statusLabel.setText("OK - " + elapsed + "ms");
+                    statusLabel.setForeground(McpColors.GREEN);
+                    resultArea.setBorder(BorderFactory.createLineBorder(McpColors.GREEN, 1));
+                    // Add to history
+                    history.add(0, new HistoryEntry(toolName, argsText));
+                    if (history.size() > MAX_HISTORY) history.remove(history.size() - 1);
+                    rebuildHistory();
+                } catch (Exception e) {
+                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    String msg = cause.getMessage();
+                    int code = -32603;
+                    if (cause instanceof burp.mcp.util.McpError me) code = me.getCode();
+                    resultArea.setText("ERROR [" + code + "]: " + msg + "\n\nStack trace:\n" +
+                            java.util.Arrays.stream(cause.getStackTrace()).limit(15)
+                                    .map(StackTraceElement::toString).collect(Collectors.joining("\n")));
+                    statusLabel.setText("ERROR [" + code + "] - " + elapsed + "ms");
+                    statusLabel.setForeground(McpColors.RED);
+                    resultArea.setBorder(BorderFactory.createLineBorder(McpColors.RED, 2));
+                }
+            }
+        }.execute();
     }
 
     private void rebuildHistory() {

@@ -95,7 +95,7 @@ class McPServerIntegrationTest {
         String response = jsonRpc("tools/list", null);
         JsonNode tools = mapper.readTree(response).get("result").get("tools");
         assertThat(tools).isNotNull();
-        assertThat(tools.size()).isGreaterThanOrEqualTo(40);
+        assertThat(tools.size()).isGreaterThanOrEqualTo(44);
     }
 
     @Test
@@ -255,6 +255,104 @@ class McPServerIntegrationTest {
         JsonNode error = mapper.readTree(response).get("error");
         assertThat(error).isNotNull();
         assertThat(error.get("message").asText()).contains("CUSTOM");
+    }
+
+    @Test
+    void customMode_aliasOfDisabledTool_shouldDeny() throws Exception {
+        server.getPermissions().setLevel(PermissionManager.Level.CUSTOM);
+        server.getPermissions().disableTool("http_send_request");
+        try {
+            String params = "{\"name\":\"send_request\",\"arguments\":{\"url\":\"http://example.com\"}}";
+            String response = jsonRpc("tools/call", params);
+            JsonNode error = mapper.readTree(response).get("error");
+            assertThat(error).isNotNull();
+            assertThat(error.get("code").asInt()).isEqualTo(-32005);
+        } finally {
+            server.getPermissions().enableTool("http_send_request");
+        }
+    }
+
+    @Test
+    void connectionCap_shouldRejectOverLimit() throws Exception {
+        McpConfig.getInstance().setMaxConnectionsPerIp(2);
+        java.util.concurrent.CountDownLatch inside = new java.util.concurrent.CountDownLatch(2);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        Thread t1 = new Thread(() -> {
+            try { server.serve(stubSession(new GateStream(inside, release))); } catch (Exception ignored) {}
+        });
+        Thread t2 = new Thread(() -> {
+            try { server.serve(stubSession(new GateStream(inside, release))); } catch (Exception ignored) {}
+        });
+        try {
+            t1.start();
+            t2.start();
+            assertThat(inside.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+            // Third concurrent connection exceeds the cap of 2
+            fi.iki.elonen.NanoHTTPD.Response resp =
+                    server.serve(stubSession(new java.io.ByteArrayInputStream(new byte[0])));
+            assertThat(resp.getStatus().getRequestStatus()).isEqualTo(503);
+        } finally {
+            release.countDown();
+            t1.join(5000);
+            t2.join(5000);
+            McpConfig.getInstance().setMaxConnectionsPerIp(10);
+        }
+    }
+
+    /** IHTTPSession stub backed by the given body stream. */
+    private fi.iki.elonen.NanoHTTPD.IHTTPSession stubSession(java.io.InputStream in) {
+        java.util.Map<String, String> headers = java.util.Map.of("content-length", "4");
+        return (fi.iki.elonen.NanoHTTPD.IHTTPSession) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(),
+                new Class<?>[]{fi.iki.elonen.NanoHTTPD.IHTTPSession.class},
+                (proxy, method, margs) -> {
+                    switch (method.getName()) {
+                        case "getMethod": return fi.iki.elonen.NanoHTTPD.Method.POST;
+                        case "getUri": return "/";
+                        case "getHeaders": return headers;
+                        case "getInputStream": return in;
+                        case "getRemoteIpAddress": return "127.0.0.1";
+                        default:
+                            Class<?> rt = method.getReturnType();
+                            if (rt == boolean.class) return false;
+                            if (rt == int.class) return 0;
+                            if (rt == long.class) return 0L;
+                            return null;
+                    }
+                });
+    }
+
+    /** Blocks the first read until released, then signals EOF. */
+    private static class GateStream extends java.io.InputStream {
+        private final java.util.concurrent.CountDownLatch inside;
+        private final java.util.concurrent.CountDownLatch release;
+        private boolean entered = false;
+
+        GateStream(java.util.concurrent.CountDownLatch inside,
+                   java.util.concurrent.CountDownLatch release) {
+            this.inside = inside;
+            this.release = release;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) {
+            if (!entered) {
+                entered = true;
+                inside.countDown();
+            }
+            try {
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return -1;
+        }
+
+        @Override
+        public int read() {
+            return -1;
+        }
     }
 
     // ── Auth Tests ─────────────────────────────────────────────────

@@ -51,6 +51,7 @@ public class ScannerIssuesListFilteredTool extends ScannerBase implements Tool {
 
     @Override
     public Object execute(Map<String, Object> args) {
+        checkProEdition();
         String urlPrefix = (String) args.get("url_prefix");
         String severityStr = (String) args.get("severity");
         int limit = 500;

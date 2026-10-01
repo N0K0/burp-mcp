@@ -42,7 +42,7 @@ public class HttpBuildRequestTool implements Tool {
         props.set("url", McpJson.property("string", "Target URL (creates a GET request if used alone)"));
         props.set("method", McpJson.property("string", "HTTP method (GET, POST, PUT, DELETE, etc.)", "GET"));
         props.set("headers", McpJson.property("object", "Object of HTTP header name-value pairs to include"));
-        props.set("body", McpJson.property("string", "HTTP request body content as a string", "GET"));
+        props.set("body", McpJson.property("string", "HTTP request body content as a string", ""));
         schema.set("properties", props);
 
         ArrayNode required = McpJson.createArrayNode();
@@ -57,6 +57,10 @@ public class HttpBuildRequestTool implements Tool {
         String url = (String) args.get("url");
         if (url == null || url.isEmpty()) {
             throw new McpError(McpError.INVALID_PARAMS, "'url' is required");
+        }
+        String urlError = burp.mcp.util.InputValidator.validateUrl(url, "'url'");
+        if (urlError != null) {
+            throw new McpError(McpError.INVALID_PARAMS, urlError);
         }
 
         String method = (String) args.get("method");

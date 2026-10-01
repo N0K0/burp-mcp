@@ -130,4 +130,23 @@ class McpJsonTest {
         String example2 = McpJson.generateExampleJson(empty);
         assertThat(example2).isEqualTo("{ }");
     }
+
+    @Test
+    void generateExampleJson_nonObjectProperties_shouldReturnEmpty() {
+        ObjectNode schema = McpJson.createObjectNode();
+        schema.put("type", "object");
+        schema.put("properties", "not-an-object");
+        assertThat(McpJson.generateExampleJson(schema)).isEqualTo("{ }");
+    }
+
+    @Test
+    void toJson_serializationFailure_shouldReturnValidJson() throws Exception {
+        Map<String, Object> selfRef = new LinkedHashMap<>();
+        selfRef.put("self", selfRef);
+        String json = McpJson.toJson(selfRef);
+        // Must be parseable JSON carrying an internal-error, never Java toString()
+        com.fasterxml.jackson.databind.JsonNode node =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+        assertThat(node.get("error").get("code").asInt()).isEqualTo(McpError.INTERNAL_ERROR);
+    }
 }

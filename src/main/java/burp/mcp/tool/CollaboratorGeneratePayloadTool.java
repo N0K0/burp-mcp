@@ -54,16 +54,10 @@ public class CollaboratorGeneratePayloadTool extends ScannerBase implements Tool
 
         String customData = (String) args.get("custom_data");
 
-        // Validate custom_data if provided
-        if (customData != null && !customData.isEmpty()) {
-            if (customData.length() > 16) {
-                throw new McpError(McpError.INVALID_PARAMS,
-                        "'custom_data' must be at most 16 characters");
-            }
-            if (!customData.matches("^[a-zA-Z0-9]+$")) {
-                throw new McpError(McpError.INVALID_PARAMS,
-                        "'custom_data' must contain only alphanumeric characters");
-            }
+        // Validate custom_data if provided (single source of truth)
+        String customError = burp.mcp.util.InputValidator.validateCustomData(customData, "'custom_data'");
+        if (customError != null) {
+            throw new McpError(McpError.INVALID_PARAMS, customError);
         }
 
         // Create collaborator client

@@ -19,8 +19,20 @@ public class RequestCache {
     private final ConcurrentHashMap<String, CacheEntry> store;
     private final int ttlSeconds;
     private final int maxEntries;
+    private java.util.concurrent.ScheduledExecutorService cleanupExecutor;
     private ScheduledFuture<?> cleanupTask;
     private volatile boolean running = true;
+
+    // Master switch for the cache_enabled preference
+    private volatile boolean enabled = true;
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
 
     // Stats
     private final LongAdder hits = new LongAdder();
@@ -54,6 +66,7 @@ public class RequestCache {
     }
 
     public void put(String key, String value) {
+        if (!enabled) return;
         if (store.size() >= maxEntries) {
             evictLru();
         }
@@ -61,9 +74,17 @@ public class RequestCache {
     }
 
     public String get(String key) {
+        if (!enabled) {
+            misses.increment();
+            return null;
+        }
         CacheEntry entry = store.get(key);
         if (entry == null || entry.isExpired(ttlSeconds)) {
-            store.remove(key);
+            // Only remove if the mapping still points at the expired entry,
+            // so a concurrent put of a fresh value under the same key is kept.
+            if (entry != null) {
+                store.remove(key, entry);
+            }
             misses.increment();
             return null;
         }
@@ -109,11 +130,17 @@ public class RequestCache {
     }
 
     private void startCleanup() {
-        cleanupTask = Executors.newSingleThreadScheduledExecutor(r -> {
+        if (ttlSeconds <= 0) {
+            // TTL 0 means entries never expire on a timer; skip the scheduler
+            // to avoid IllegalArgumentException from scheduleAtFixedRate.
+            return;
+        }
+        cleanupExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "request-cache-cleanup");
             t.setDaemon(true);
             return t;
-        }).scheduleAtFixedRate(this::cleanup, ttlSeconds, ttlSeconds, TimeUnit.SECONDS);
+        });
+        cleanupTask = cleanupExecutor.scheduleAtFixedRate(this::cleanup, ttlSeconds, ttlSeconds, TimeUnit.SECONDS);
     }
 
     private void cleanup() {
@@ -124,6 +151,11 @@ public class RequestCache {
         running = false;
         if (cleanupTask != null) {
             cleanupTask.cancel(false);
+            cleanupTask = null;
+        }
+        if (cleanupExecutor != null) {
+            cleanupExecutor.shutdownNow();
+            cleanupExecutor = null;
         }
         store.clear();
     }

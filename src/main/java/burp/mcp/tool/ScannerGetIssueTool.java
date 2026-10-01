@@ -37,7 +37,7 @@ public class ScannerGetIssueTool extends ScannerBase implements Tool {
 
         ObjectNode props = McpJson.createObjectNode();
         props.set("url", McpJson.property("string", "Target URL (creates a GET request if used alone)"));
-        props.set("name", McpJson.property("string", "Cookie name"));
+        props.set("name", McpJson.property("string", "Issue name to look up"));
         schema.set("properties", props);
 
         ArrayNode required = McpJson.createArrayNode();
@@ -49,6 +49,7 @@ public class ScannerGetIssueTool extends ScannerBase implements Tool {
 
     @Override
     public Object execute(Map<String, Object> args) {
+        checkProEdition();
         String url = (String) args.get("url");
         String name = (String) args.get("name");
 

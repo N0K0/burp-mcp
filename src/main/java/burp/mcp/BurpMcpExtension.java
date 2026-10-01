@@ -24,8 +24,14 @@ public class BurpMcpExtension implements BurpExtension {
     public void initialize(MontoyaApi api) {
         api.extension().setName("Burp MCP Server");
 
-        // Clear stale global handler from previous loads
-        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {});
+        // Clear stale global handler from previous loads, but keep logging
+        // so post-reload crashes are still visible.
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+            try {
+                api.logging().logToError("[burp-mcp] uncaught in thread " + t.getName(), e);
+            } catch (Exception ignored) {
+            }
+        });
 
         logBanner(api);
 
@@ -36,7 +42,16 @@ public class BurpMcpExtension implements BurpExtension {
                 return api.persistence().preferences().getString(key); }
             @Override public Integer getInteger(String key) {
                 String val = api.persistence().preferences().getString(key);
-                return val != null ? Integer.parseInt(val) : null; }
+                if (val == null) {
+                    return null;
+                }
+                try {
+                    return Integer.parseInt(val.trim());
+                } catch (NumberFormatException e) {
+                    api.logging().logToError("[burp-mcp] Ignoring corrupt preference '" + key + "': " + val, e);
+                    return null;
+                }
+            }
             @Override public void setString(String key, String value) {
                 api.persistence().preferences().setString(key, value); }
             @Override public void setInteger(String key, Integer value) {
@@ -53,10 +68,16 @@ public class BurpMcpExtension implements BurpExtension {
         api.logging().logToOutput("[burp-mcp] Port: " + config.getPort());
         api.logging().logToOutput("[burp-mcp] Log level: " + config.getLogLevel());
 
+        for (String err : config.validate()) {
+            api.logging().logToOutput("[burp-mcp] Invalid config: " + err);
+        }
+
         McpConfig.setRequestCache(new RequestCache(config.getCacheTtlSeconds()));
+        McpConfig.getRequestCache().setEnabled(config.isCacheEnabled());
 
         // ── Metrics ──
         metrics = new MetricsCollector();
+        metrics.setEnabled(config.isMetricsEnabled());
 
         // ── Tool Registry ──
         registry = new McpToolRegistry(api);
@@ -85,11 +106,18 @@ public class BurpMcpExtension implements BurpExtension {
                 String cn = config.getBindAddress();
                 char[] pw = config.getTlsKeystorePassword().toCharArray();
                 javax.net.ssl.SSLServerSocketFactory ssl;
-                if ("custom".equals(mode) && !config.getTlsKeystorePath().isEmpty()) {
+                if ("custom".equals(mode)) {
+                    if (config.getTlsKeystorePath().isEmpty()) {
+                        throw new IllegalStateException("tls_mode=custom requires tls_keystore_path");
+                    }
                     ssl = TlsManager.createFromKeystore(config.getTlsKeystorePath(), pw);
+                } else if (!"self_signed".equals(mode)) {
+                    throw new IllegalStateException("Unknown tls_mode: " + mode);
                 } else {
                     ssl = TlsManager.createSelfSigned(cn, pw);
                 }
+                // Clear password copy as soon as possible.
+                java.util.Arrays.fill(pw, '\0');
                 server.enableTls(ssl, "TLSv1.2", "TLSv1.3");
             }
             server.start();

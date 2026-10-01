@@ -72,6 +72,10 @@ public class ScannerStartCrawlTool extends ScannerBase implements Tool {
             if (url.isEmpty()) {
                 throw new McpError(McpError.INVALID_PARAMS, "URL must not be empty");
             }
+            String urlError = burp.mcp.util.InputValidator.validateUrl(url, "'seed_urls'");
+            if (urlError != null) {
+                throw new McpError(McpError.INVALID_PARAMS, urlError);
+            }
             seedUrls[idx++] = url;
         }
 

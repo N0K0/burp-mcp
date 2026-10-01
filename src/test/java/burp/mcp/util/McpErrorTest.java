@@ -41,5 +41,7 @@ class McpErrorTest {
         assertThat(McpError.REQUEST_FAILED).isEqualTo(-32003);
         assertThat(McpError.NOT_FOUND).isEqualTo(-32004);
         assertThat(McpError.PERMISSION_DENIED).isEqualTo(-32005);
+        assertThat(McpError.RATE_LIMITED).isEqualTo(-32006);
+        assertThat(McpError.SERVER_BUSY).isEqualTo(-32007);
     }
 }
