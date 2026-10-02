@@ -2,7 +2,7 @@
 
 All notable changes to the Burp MCP Server plugin.
 
-## [Unreleased]
+## [1.1.0] - 2026-10-03
 
 ### Fixed
 - Permission drift: `scope_list`, `sitemap_search`, `config_list_preferences`, `websocket_history_get`, and `burp_metrics` are now read-only tools
