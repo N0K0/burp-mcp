@@ -18,7 +18,6 @@ public interface Tool {
      * Execute the tool with the given arguments.
      * @param args The tool arguments as a Map
      * @return The tool result as a Map (will be serialized to JSON)
-     * @throws Exception if the tool encounters an error
      */
     Object execute(Map<String, Object> args);
 

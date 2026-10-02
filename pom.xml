@@ -114,6 +114,13 @@
                 <version>3.5.2</version>
             </plugin>
 
+            <!-- Javadoc for the Pages docs site (mvn javadoc:javadoc) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.11.2</version>
+            </plugin>
+
             <!-- Fat JAR with all dependencies (except provided Montoya API) -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
