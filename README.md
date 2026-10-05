@@ -1,27 +1,25 @@
 # Burp MCP Server
 
-Burp MCP Server is a Burp Suite extension that turns your running Burp into a
-set of MCP tools. An AI coding agent can then send HTTP requests, read what
-Burp has already captured, drive the scanner, and hand work to Repeater,
-Intruder, Comparer, or Organizer, all inside the project you are working in.
+A Burp Suite extension that exposes your running Burp as MCP tools. An AI
+agent can send HTTP requests, read proxy history and the site map, drive the
+scanner, and hand requests to Repeater, Intruder, Comparer, or Organizer.
 
-It runs in Burp's JVM and speaks JSON-RPC 2.0 over HTTP. Clients connect
-either to a TCP port on loopback or to a Unix socket next to the open project
-file.
+It runs in Burp's JVM and speaks JSON-RPC 2.0 over HTTP, on TCP or a
+per-project Unix socket.
 
-| | |
-|---|---|
-| Runs inside | Burp Suite Community or Professional |
-| Exposes | 53 MCP tools across HTTP, proxy, sitemap, scope, scanner, Collaborator, Organizer, and config |
-| Transports | TCP on `127.0.0.1:4444` and a per-project Unix socket |
-| Needs Professional | Scanner, crawler, and Collaborator tools |
+| Component | Value |
+|-----------|-------|
+| Host | Burp Suite Community or Professional |
+| Tools | 53 across HTTP, proxy, sitemap, scope, scanner, Collaborator, Organizer, config |
+| Transports | TCP on `127.0.0.1:4444`, plus a Unix socket per project |
+| Professional-only | Scanner, crawler, and Collaborator tools |
 | Clients | Any MCP client that can POST JSON-RPC to an HTTP URL |
 
 ## Getting the extension
 
 Download `burp-mcp-server.jar` from the
-[latest release](https://github.com/N0K0/burp-mcp/releases), or build from
-source for the newest work on `main`:
+[latest release](https://github.com/N0K0/burp-mcp/releases), or build current
+`main`:
 
 ```bash
 git clone https://github.com/N0K0/burp-mcp.git
@@ -29,20 +27,15 @@ cd burp-mcp
 mvn clean package -DskipTests
 ```
 
-The build needs JDK 17 or newer and Maven 3.9 or newer. It writes
+JDK 17 or newer and Maven 3.9 or newer are required. The build writes
 `target/burp-mcp-server.jar`.
 
-Load the jar in Burp under Extensions -> Installed -> Add -> Java. Burp does
-not reload Java extensions on its own, so remove the old entry and add the
-jar again after a rebuild.
-
-On WSL, if `/mnt/c` exists, the build also copies the jar to
-`C:\Users\nikolas\Downloads\burp-mcp-server.jar`. Everywhere else that step
-is skipped and never fails the build.
+Load it under Extensions -> Installed -> Add -> Java. Burp does not reload
+Java extensions, so remove and re-add the entry after a rebuild. On WSL with
+`/mnt/c` present, the build also copies the jar to
+`C:\Users\nikolas\Downloads\`.
 
 ## Checking it works
-
-With Burp running and the extension loaded:
 
 ```bash
 # list the tools
@@ -59,11 +52,10 @@ curl -s -X POST -H "Content-Type: application/json" \
 curl -s http://127.0.0.1:4444/health
 ```
 
-The same calls work over the Unix socket. The live path is in
-`burp_info` -> `mcpSocketPath`, and the Status tab can copy it for you:
+The same calls work over the Unix socket. Get the path from `burp_info` ->
+`mcpSocketPath`, or from the Status tab:
 
 ```bash
-# discover the live socket path
 SOCK=$(curl -s -X POST -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"burp_info","arguments":{}},"id":"1"}' \
   http://127.0.0.1:4444/ \
@@ -74,88 +66,66 @@ curl -s --unix-socket "$SOCK" http://localhost/health
 
 ## How it fits together
 
-```
-MCP client (Claude, Cursor, Hermes, opencode, ...)
-    |  HTTP POST, JSON-RPC 2.0
-    v
-Burp MCP Server extension, inside Burp's JVM
-    |  TCP :4444 and/or <project>.sock
-    |  Montoya API
-    v
-Burp Suite, with your project, scope, history, and license
-```
+The extension runs inside Burp's JVM on the Montoya API, so an agent works on
+the project you have open: the same proxy history, site map, scope, cookies,
+and Professional license.
 
-Because the extension runs inside Burp, an agent works on the project you
-have open: the same proxy history, the same site map, the same scope, the
-same cookies, the same Professional license. There is no second proxy to
-start and no traffic to export first.
-
-The extension adds a "Burp MCP" tab with five screens. Status shows the
-listeners with Start/Stop/Restart, a metrics dashboard, and the request log.
-Settings holds every preference with validation and JSON export/import. Tool
-Tester runs a single tool by hand. Permissions decides what agents may call.
-Messages browses proxy, sitemap, and WebSocket traffic with syntax
-highlighting.
+It adds a "Burp MCP" tab with five screens: Status (Start/Stop/Restart,
+metrics, request log), Settings, Tool Tester, Permissions, and Messages.
 
 ## Transports and multiple projects
 
-TCP listens on `mcp_port`, 4444 by default. One port, one Burp instance, and
-a client config that never changes.
+TCP listens on `mcp_port`, 4444 by default.
 
-The Unix socket is on by default and lives next to the open project file, so
-`~/burp-projects/exness-20261004.burp` gets
-`~/burp-projects/exness-20261004.sock`. Each project gets its own socket, so
-two Burp instances do not have to share a port. Temporary projects, project
-files the extension cannot locate, and paths over the OS limit fall back to
-`<tmp>/burp-mcp-<hash>.sock`. Override the path with the `socket_path`
-setting or `BURP_MCP_SOCKET_PATH`, or turn the socket off with
-`socket_enabled=false`.
+The Unix socket is on by default next to the open project file, so
+`~/burp-projects/exness.burp` gets `~/burp-projects/exness.sock`. Each project
+gets its own socket, and several Burp instances can run at once. Temporary
+projects, unlocatable project files, and over-long paths fall back to
+`<tmp>/burp-mcp-<hash>.sock`. Set `socket_path` or `BURP_MCP_SOCKET_PATH` to
+override; set `socket_enabled=false` to disable.
 
-If something already holds 4444, that instance keeps serving on its socket
-and the Status tab shows `Failed: port 4444 already in use (another Burp
-instance?)`. Close the instance holding the port and press Restart.
+If another process holds 4444, this instance keeps serving on its socket and
+the Status tab reports the conflict. Close the other instance and press
+Restart.
 
-Both transports speak the same HTTP JSON-RPC, with the same auth,
-permissions, rate limits, and `/health`. The socket handles one request per
-connection (`Connection: close`), its file is owner-only, and it is removed
-on Stop, Restart, or unload. A stale file from a crash is replaced on the
-next start. Python clients need an AF_UNIX connector, for example
-`http.client.HTTPConnection` over `socket.AF_UNIX`. `curl --unix-socket`
-works as is.
+Both transports use the same HTTP JSON-RPC, including auth, permissions, rate
+limits, and `/health`. The socket handles one request per connection
+(`Connection: close`), is owner-only, and is removed on Stop, Restart, or
+unload; a crash leaves a stale file that the next start replaces. Python
+clients need an AF_UNIX connector; `curl --unix-socket` works as is.
 
 ## The tools
 
-53 tools in total. Aliases work too: `proxy_list` maps to
-`proxy_history_list`, `send_request` to `http_send_request`, and so on.
-Permissions and metrics use the canonical name, so disabling a tool also
-disables its aliases.
+53 tools. Aliases work too: `proxy_list` maps to `proxy_history_list`,
+`send_request` to `http_send_request`. Permissions and metrics use canonical
+names, so disabling a tool also disables its aliases.
 
 ### Send and shape HTTP
 
 | Tool | What it does |
 |------|--------------|
-| `http_send_request` | Send a URL as a GET, or a complete raw HTTP message. Options for redirects, timeout, and HTTP version. |
+| `http_send_request` | Send a URL as GET, or a complete raw HTTP message. Redirect, timeout, and HTTP version options. |
 | `http_send_requests` | Send several raw requests in parallel. |
 | `http_build_request` | Build a request from method, URL, headers, and body. Returns the raw message and a `request_id`. |
 | `http_modify_request` | Add or remove headers, replace the body, or change the method. |
 | `http_parse_request` | Split a raw request into method, URL, path, query, headers, body, and HTTP version. |
 | `http_parse_response` | Split a raw response into status, headers, body, MIME type, and cookies. |
-| `http_store_request` | Keep a raw request in the extension's cache. |
-| `http_get_request` | Fetch a stored request by its `request_id`. |
+| `http_store_request` | Cache a raw request for later. |
+| `http_get_request` | Fetch a cached request by `request_id`. |
 
 ### Read what Burp has seen
 
 | Tool | What it does |
 |------|--------------|
-| `proxy_history_list` | List captured HTTP requests, filtered by URL prefix, method, or status code. |
+| `proxy_history_list` | List captured HTTP requests; filter by URL prefix, method, or status. |
 | `proxy_history_get` | Fetch one proxy history entry by ID. |
 | `proxy_websocket_history_list` | List WebSocket messages captured by the proxy. |
 | `websocket_history_get` | Fetch one WebSocket message by index. |
 | `sitemap_list` | List site map entries, optionally in-scope only. |
-| `sitemap_list_filtered` | Filter the site map by URL prefix, host, method, or status. |
-| `sitemap_get` | Fetch a site map entry by URL, exact or prefix match. |
+| `sitemap_list_filtered` | Filter by URL prefix, host, method, or status. |
+| `sitemap_get` | Fetch a site map entry by URL, exact or prefix. |
 | `sitemap_search` | Regex search across request and response bodies. |
-| `organizer_list` | List items stashed in Burp's Organizer. |
+| `organizer_list` | List items stashed in Organizer. |
 | `cookie_list` | Read Burp's cookie jar. |
 | `cookie_set` | Add or update a cookie. |
 
@@ -167,46 +137,46 @@ disables its aliases.
 | `http_send_to_intruder` | Send a request to Intruder, keeping `~` payload markers. |
 | `http_send_to_comparer` | Send two or more strings to Comparer. |
 | `http_send_to_decoder` | Send data to Decoder. |
-| `http_send_to_organizer` | Stash a request in Organizer for follow-up. |
-| `logger_add` | Send a request and add the request/response pair to the site map. Burp has no Logger write API, so this uses `sitemap.add()`. |
+| `http_send_to_organizer` | Stash a request in Organizer. |
+| `logger_add` | Send a request and add the request/response to the site map. Burp has no Logger write API. |
 
 ### Scanner and crawler (Professional)
 
 | Tool | What it does |
 |------|--------------|
-| `scanner_start_audit` | Active or passive audit of one or more seed URLs, with optional headers such as cookies. Burp stamps its own User-Agent on the traffic it generates; a seed User-Agent only feeds the UA insertion point checks. |
+| `scanner_start_audit` | Active or passive audit of seed URLs, with optional headers such as cookies. Burp stamps its own User-Agent on generated traffic. |
 | `scanner_issues_list` | List every issue in the site map. |
 | `scanner_issues_list_filtered` | Filter issues by URL prefix or severity. |
 | `scanner_get_issue` | Full details for one issue, by URL and optional name. |
-| `scanner_generate_report` | Write an HTML or XML report and return the path. |
+| `scanner_generate_report` | Write an HTML or XML report; returns the path. |
 | `scanner_bcheck_import` | Load a BCheck from text or a file. |
-| `scanner_start_crawl` | Start a crawl from seed URLs. Returns a `crawl_id`. |
-| `scanner_crawl_status` | Poll a crawl's request and error counts. Current Burp builds leave the crawl status message unimplemented, so counts are the honest progress signal. |
+| `scanner_start_crawl` | Crawl from seed URLs; returns a `crawl_id`. |
+| `scanner_crawl_status` | Poll request and error counts. Burp does not implement the crawl status message. |
 | `scanner_crawl_stop` | Stop and delete a crawl. |
 | `task_engine_status` | Check whether Spider and Scanner are running or paused. |
-| `task_engine_set` | Pause or resume Spider and Scanner, for example before manual replay work. |
+| `task_engine_set` | Pause or resume Spider and Scanner. |
 
 ### Out-of-band testing (Professional)
 
 | Tool | What it does |
 |------|--------------|
-| `collaborator_generate_payload` | Generate a unique Collaborator payload, optionally with up to 16 alphanumeric characters of custom data. |
-| `collaborator_interactions` | Poll interactions for a payload's secret key, filtered by type (DNS, HTTP, SMTP, and so on). |
+| `collaborator_generate_payload` | Generate a unique Collaborator payload, with up to 16 alphanumeric characters of custom data. |
+| `collaborator_interactions` | Poll interactions for a payload, filtered by DNS, HTTP, SMTP, and other types. |
 
 ### Scope, project, and settings
 
 | Tool | What it does |
 |------|--------------|
 | `scope_check` | Is this URL in Burp's target scope? |
-| `scope_list` | Show the include rules plus in-scope URLs seen in sitemap traffic. |
-| `scope_set` | Add or remove include/exclude rules, one URL or many. |
+| `scope_list` | Show include rules plus in-scope URLs seen in sitemap traffic. |
+| `scope_set` | Add or remove include/exclude rules. |
 | `burp_info` | Burp version and edition, project name and ID, and the live socket path. |
-| `project_create` | Returns the command to launch a new `.burp` project file. Projects cannot be created through the Montoya API. |
+| `project_create` | Returns a command to launch a new `.burp` file; the API cannot create projects. |
 | `config_get` | Export Burp configuration as JSON, project or user scope. |
 | `config_set` | Import Burp configuration from JSON. |
-| `config_list_preferences` | Dump the extension's own settings. |
+| `config_list_preferences` | Dump the extension's settings. |
 | `proxy_intercept_status` | Check whether proxy interception is on. |
-| `proxy_toggle_intercept` | Flip proxy interception on or off. |
+| `proxy_toggle_intercept` | Turn proxy interception on or off. |
 
 ### Encode, compare, search
 
@@ -214,44 +184,40 @@ disables its aliases.
 |------|--------------|
 | `decoder_decode` | Decode base64, URL, or hex. |
 | `decoder_encode` | Encode to base64, URL, or hex. |
-| `http_diff_responses` | Compare two responses and report what differs and what stays the same. |
-| `http_keyword_search` | Check which keywords appear in all responses and which appear in only some. |
+| `http_diff_responses` | Compare two responses; report what differs and what stays the same. |
+| `http_keyword_search` | Find keywords that appear in all responses and ones that appear in only some. |
 
 ### Server health
 
 `burp_metrics` returns uptime, request counts, latency percentiles, per-tool
-call counts, cache hit rate, and active connections. The same numbers are
-available in Prometheus format from `GET /health?format=prometheus`.
+counts, cache hit rate, and active connections. The same numbers are at
+`GET /health?format=prometheus`.
 
 ## A worked example
 
-Agents pick their own tools, so this is what a session tends to look like
-rather than a fixed script. Say you ask:
+Prompt: "Map everything under `https://shop.example.test` and look at the
+checkout flow." The agent alternates between reading Burp's state and sending
+requests:
 
-> Map everything under `https://shop.example.test` and look at the checkout
-> flow.
+1. `scope_check` on the seed.
+2. `sitemap_list`, `sitemap_search`, and `proxy_history_list` for what Burp
+   already captured.
+3. `http_send_request` to cover gaps and exercise checkout.
+4. `http_send_to_repeater` or `http_send_to_organizer` for manual follow-up.
+5. On Professional: `scanner_start_audit`, then
+   `scanner_issues_list_filtered` at severity HIGH, `scanner_get_issue`, and
+   `scanner_generate_report`.
+6. For blind bugs: `collaborator_generate_payload`, use the payload, then
+   `collaborator_interactions`.
 
-The agent usually ends up alternating between reading Burp's state and
-sending requests:
-
-1. `scope_check` on the seed to confirm it is in scope.
-2. `sitemap_list` and `sitemap_search` for what Burp already knows, plus
-   `proxy_history_list` for captured traffic.
-3. `http_send_request` to cover gaps and exercise the checkout flow.
-4. `http_send_to_repeater` or `http_send_to_organizer` for anything worth a
-   human look.
-5. On Professional: `scanner_start_audit` on the interesting URLs, then
-   `scanner_issues_list_filtered` at severity HIGH, then `scanner_get_issue`
-   for details, and `scanner_generate_report` at the end.
-6. For blind bugs: `collaborator_generate_payload`, put the payload in the
-   request, and later `collaborator_interactions`.
-
-The extension does not test anything by itself. The agent decides what to
-call, and every call is subject to the permission rules below.
+The extension runs nothing on its own; every call goes through the permission
+rules below.
 
 ## Connecting a client
 
-Any MCP client that supports remote HTTP servers works. Hermes:
+Any MCP client that supports remote HTTP servers works.
+
+Hermes:
 
 ```yaml
 # ~/.hermes/config.yaml
@@ -287,23 +253,14 @@ opencode:
 }
 ```
 
-For a custom client, the surface is small. POST JSON-RPC to `/`, with the
-usual MCP methods:
-
-```
-initialize
-tools/list
-tools/call     {"name": "burp_info", "arguments": {}}
-```
-
-`GET /health` sits outside JSON-RPC and returns `{"status":"ok"}` or
-`{"status":"error"}`.
+Custom clients POST JSON-RPC to `/` with `initialize`, `tools/list`, and
+`tools/call`. `GET /health` returns `{"status":"ok"}` or `{"status":"error"}`.
 
 ## Permissions and safety
 
-The Permissions tab has three modes:
+Three modes in the Permissions tab:
 
-- Read-Write: everything is allowed. This is the default.
+- Read-Write (default): everything allowed.
 - Read-Only: queries only. That covers `burp_info`, `project_create`,
   `burp_metrics`, `sitemap_*`, `proxy_history_*`, `proxy_intercept_status`,
   `proxy_websocket_history_list`, `websocket_history_get`, `scope_check`,
@@ -312,28 +269,23 @@ The Permissions tab has three modes:
   `http_get_request`, `http_diff_responses`, `http_keyword_search`,
   `config_get`, `config_list_preferences`, the scanner issue reads, and
   `collaborator_interactions`.
-- Custom: enable tools one by one. Deny wins, and anything you do not
-  explicitly enable stays allowed, so read the list before relying on it.
+- Custom: enable tools one by one. Deny wins, and unlisted tools stay
+  allowed.
 
 The sensitivity switch blocks `scope_set`, `config_set`,
 `scanner_start_audit`, `scanner_start_crawl`, `scanner_crawl_stop`,
 `scanner_bcheck_import`, `task_engine_set`, and `proxy_toggle_intercept` in
-every mode. Turn it off when you actually need those.
+every mode.
 
-Two things worth knowing before you point an agent at a live target:
-
-- The tools run with your Burp license and your network position.
-  `http_send_request` and `http_send_requests` can reach anything Burp can
-  reach, in or out of scope. Burp's scope is a useful signal, not a sandbox.
-- Scanner and crawler tools create real traffic against the target. Read-Only
-  mode and the sensitivity switch exist so passive work stays passive.
+`http_send_request` and `http_send_requests` can reach anything Burp can
+reach; Burp's scope does not restrict them. Scanner and crawler tools
+generate real traffic against the target.
 
 ## Configuration
 
 Burp stores these in extension preferences, so they survive restarts. The
-Settings tab exposes all of them, with JSON export/import. Exports leave out
-`auth_token` and `tls_keystore_password`, so copy those by hand when you move
-machines.
+Settings tab exposes all of them with JSON export/import. Exports omit
+`auth_token` and `tls_keystore_password`.
 
 | Key | Default | What it does |
 |-----|---------|--------------|
@@ -363,8 +315,7 @@ machines.
 | `tls_keystore_path` | (none) | PKCS12 path for `custom` mode |
 | `tls_keystore_password` | burpmcp | Keystore password |
 
-Environment variables win over stored preferences, which helps in CI or
-containers:
+Environment variables win over stored preferences:
 
 ```bash
 BURP_MCP_PORT=4444
@@ -374,14 +325,12 @@ BURP_MCP_LOG_LEVEL=INFO
 BURP_MCP_SOCKET_PATH=/tmp/burp-proj-a.sock
 ```
 
-Bad values are logged at startup as `Invalid config: ...`. If
-`auth_enabled=true` and the token is empty, the server refuses to serve
-rather than letting everyone in.
+Bad values are logged at startup as `Invalid config: ...`. An empty token
+with `auth_enabled=true` blocks serving.
 
 ## Health, logs, and limits
 
-Auth is a single Bearer token. Set `auth_enabled=true` and put the token in a
-header:
+Auth is a single Bearer token:
 
 ```yaml
 mcp_servers:
@@ -391,11 +340,9 @@ mcp_servers:
       Authorization: Bearer <token>
 ```
 
-TLS is off by default. Set `tls_enabled=true`, then pick `self_signed` for
-local work or `custom` with a PKCS12 keystore. `custom` without a keystore
-path fails at startup instead of silently falling back to HTTP.
-
-Health and metrics:
+TLS is off by default. Set `tls_enabled=true`, then `self_signed` for local
+work or `custom` with a PKCS12 keystore; `custom` without a path fails at
+startup.
 
 ```bash
 curl http://127.0.0.1:4444/health
@@ -404,15 +351,15 @@ curl http://127.0.0.1:4444/health?format=prometheus
 
 Health stays unauthenticated so monitoring can poll it.
 
-Limits: inbound bodies cap at 10 MB and tool output truncates at
+Inbound bodies cap at 10 MB and tool output truncates at
 `max_response_body_bytes`. Rate limiting is per socket IP, and
-`X-Forwarded-For` is ignored because clients can spoof it. The connection
-cap returns 503 with `-32007` when it is saturated. Tools that call outside
-Burp get a circuit breaker: five failures in 60 seconds open it for 30
-seconds, then one probe request decides whether to close it again.
+`X-Forwarded-For` is ignored because clients can spoof it. The connection cap
+returns 503 with `-32007`. Tools that call outside Burp get a circuit
+breaker: five failures in 60 seconds open it for 30 seconds, then one probe
+decides whether to close it.
 
-Logs are JSON lines with a correlation ID per call, filtered by `log_level`.
-The file copy rotates at 5 MB and keeps three backups.
+Logs are JSON lines with a correlation ID per call, filtered by `log_level`;
+the file copy rotates at 5 MB and keeps three backups.
 
 Errors come back as JSON-RPC codes:
 
@@ -426,26 +373,26 @@ Errors come back as JSON-RPC codes:
 | `-32006` | Rate limited (`429`) |
 | `-32007` | Server busy (HTTP 503: connection cap or saturated pool) |
 
-A malformed `Content-Length` or a truncated body returns `400`, not `500`.
+A malformed `Content-Length` or truncated body returns `400`, not `500`.
 
-The Status tab has Start, Stop, and Restart for the listeners. Restart
-re-reads saved settings, so changes to the port, bind address, TLS, socket,
-and pool sizes apply without reloading the extension.
+The Status tab has Start, Stop, and Restart. Restart re-reads saved settings,
+so port, bind address, TLS, socket, and pool changes apply without reloading
+the extension.
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-|---------|--------------|-----|
-| Extension will not load | Corrupt preference or bad port | Check Burp's output for `Invalid config` and fix it in Settings |
-| Agent cannot connect | Wrong port, or another program owns it | Check `curl http://127.0.0.1:4444/health`; if that fails, the instance is on its socket only and the Status tab says why |
-| Port busy | Another Burp instance holds 4444 | This instance keeps serving on its Unix socket; close the other instance and press Restart, or change `mcp_port` |
-| Tools look stale after a rebuild | Burp kept the old jar loaded | Remove and re-add the extension |
-| `-32001` on scanner | Community edition | Expected; scanner and Collaborator need Professional |
-| `401` on every call | `auth_enabled` with the wrong token | Copy the token from Settings, check `BURP_MCP_AUTH_TOKEN` |
-| `503` auth misconfigured | `auth_enabled=true` with an empty token | Set a token, then Start or Restart |
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Extension will not load | Corrupt preference or bad port | Check Burp's output for `Invalid config`; fix in Settings |
+| Agent cannot connect | Wrong port, or another program owns it | `curl http://127.0.0.1:4444/health`; if that fails, the instance is socket-only and the Status tab says why |
+| Port busy | Another Burp instance holds 4444 | This instance keeps serving on its socket; close the other, press Restart, or change `mcp_port` |
+| Tools look stale | Burp kept the old jar loaded | Remove and re-add the extension |
+| `-32001` on scanner | Community edition | Scanner and Collaborator need Professional |
+| `401` on every call | Wrong token | Copy the token from Settings; check `BURP_MCP_AUTH_TOKEN` |
+| `503` auth misconfigured | `auth_enabled=true`, empty token | Set a token, then Start or Restart |
 | `429` | Rate limit hit | Wait for `Retry-After`, raise the limit, or set it to 0 |
-| Empty proxy history | No traffic yet | Browse through Burp first, then retry |
-| TLS errors with self-signed | Missing SAN in older certificates | Use a `custom` PKCS12 or trust the certificate explicitly |
+| Empty proxy history | No traffic yet | Browse through Burp first |
+| TLS errors with self-signed | Missing SAN in older certificates | Use a `custom` PKCS12 or trust the certificate |
 
 ## Development
 
@@ -455,32 +402,29 @@ mvn test                      # 119 unit and mocked-transport tests
 mvn clean package -DskipTests
 ```
 
-There is no Maven wrapper checked in. Tests use JUnit 5 and AssertJ, and the
+No Maven wrapper is checked in. Tests use JUnit 5 and AssertJ, and the
 integration suite starts a real NanoHTTPD on a random port.
 
-`LiveBurpIT` is excluded from normal runs and needs Burp running with the
-extension loaded:
+`LiveBurpIT` is excluded from normal runs and needs Burp with the extension
+loaded:
 
 ```bash
 BURP_MCP_TEST_BASE_URL=http://127.0.0.1:4444 mvn test -Dtest=LiveBurpIT
 ```
 
-Optional environment: `BURP_MCP_TEST_AUTH_TOKEN` for a Bearer token, and
+Optional: `BURP_MCP_TEST_AUTH_TOKEN` for a Bearer token,
 `BURP_MCP_TEST_ALLOW_SCANS=1` to include the crawl test on Professional. The
-suite starts its own loopback HTTP and TLS targets, uses one unique scope
-subtree and cleans it up, backs off on `429`, and skips quietly when Burp is
-not reachable.
+suite starts its own loopback targets, cleans up the scope subtree it uses,
+backs off on `429`, and skips when Burp is unreachable.
 
-The codebase conventions, project layout, and the checklist for adding a tool
-live in [AGENTS.md](AGENTS.md).
+Conventions and project layout are in [AGENTS.md](AGENTS.md).
 
 ## Security
 
 The server binds to loopback by default. Opening `bind_address` to `0.0.0.0`
-without auth or TLS exposes Burp to your network, so do not do that on
-untrusted networks. The tools act with your Burp session's access, so treat
-an MCP client like any other operator at your keyboard. Use Read-Only mode
-and the sensitivity switch when an agent only needs to look.
+without auth or TLS exposes Burp to your network. The tools act with your
+Burp session's access, so treat an MCP client like any other operator at your
+keyboard. Use Read-Only mode and the sensitivity switch for passive work.
 
 ## License
 
