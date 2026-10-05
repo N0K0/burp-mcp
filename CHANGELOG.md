@@ -2,6 +2,16 @@
 
 All notable changes to the Burp MCP Server plugin.
 
+## [Unreleased]
+
+### Added
+- Server controls in the Status tab: **Start**, **Stop**, and **Restart** without reloading the extension; Restart re-reads saved settings (port, bind, TLS, socket, pools)
+- Unix domain socket transport alongside TCP. The default path sits next to the open `.burp` project file (`exness.burp` → `exness.sock`), so multiple projects never clash on ports; `socket_enabled`, `socket_path`, and `BURP_MCP_SOCKET_PATH` override, and temporary projects fall back to `<tmp>/burp-mcp-<hash>.sock`
+- `burp_info` reports the live `mcpSocketPath`; the Status tab shows it with a **Copy Socket Path** button
+
+### Changed
+- TCP bind failures no longer abort startup: a busy port (another Burp instance) is reported in the Status tab while the Unix socket keeps serving this project
+
 ## [1.1.0] - 2026-10-03
 
 ### Fixed

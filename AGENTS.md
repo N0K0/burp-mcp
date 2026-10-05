@@ -8,7 +8,7 @@ AI agents (you) call these tools to interact with Burp programmatically.
 ```bash
 cd /home/nikolas/git/burp-mcp
 mvn clean compile          # compile only
-mvn test                   # run 67 JUnit 5 + AssertJ tests
+mvn test                   # run 119 JUnit 5 + AssertJ tests (live Burp suite excluded, see below)
 mvn clean package -DskipTests  # build fat JAR → C:\Users\nikolas\Downloads\
 ```
 
@@ -20,7 +20,9 @@ Java 17+, Maven 3.9+. WSL builds, Windows host runs Burp.
 src/main/java/burp/mcp/
 ├── BurpMcpExtension.java          # BurpExtension entry point
 ├── server/
-│   └── McPServer.java             # NanoHTTPD JSON-RPC handler (health, auth, rate-limit, metrics, circuit-breaker)
+│   ├── McPServer.java             # NanoHTTPD JSON-RPC handler (health, auth, rate-limit, metrics, circuit-breaker)
+│   ├── McpServerManager.java      # start/stop/restart lifecycle; binds TCP and the Unix socket independently
+│   └── UnixSocketServer.java      # Unix-domain-socket HTTP listener → McPServer.serve() via fake IHTTPSession
 ├── tool/
 │   ├── Tool.java                  # Interface: definition(), inputSchema(), execute()
 │   ├── ToolDefinition.java        # {name, description, schema}
@@ -40,6 +42,7 @@ src/main/java/burp/mcp/
     ├── McpJson.java               # JSON-RPC 2.0 encode/decode + schema helpers
     ├── McpError.java               # MCP error codes (-32001 to -32007), RuntimeException
     ├── McpConfig.java              # Preferences-backed singleton, env var overrides, validate()
+    ├── ProjectFiles.java            # recent-project lookup → default socket next to the .burp file
     ├── LogEntry.java               # Structured log record (JSON-lines)
     ├── ErrorLogger.java            # File-based logger with rotation (5MB/3 files)
     ├── MetricsCollector.java       # Latency percentiles, request rate, tool counts
@@ -148,15 +151,23 @@ List<String> errors = cfg.validate();
 ## UI conventions
 
 - Panels are registered in `McpUiPanel` constructor, each wrapped in `SafePanel` (catches paint/layout NPEs)
-- StatusPanel gets the server reference via `setServer()` after server.start()
+- StatusPanel gets the `McpServerManager` via `setManager()`; Start/Stop/Restart run off the EDT (SwingWorker) and the panel polls manager state
 - All colors through `McpColors` constants: no bare hex values
 - All fonts through `McpColors.LABEL_FONT` / `MONO_FONT` / `MONO_SMALL`
 - Tooltips on every setting field and button
 
 ## Testing
 
-- 67 tests: 50 unit + 17 integration
+- 119 tests: unit + mocked-transport integration (McPServerIntegrationTest,
+  UnixSocketServerTest); LiveBurpIT (14 tests vs a real Burp) is opt-in
 - Integration tests start a real NanoHTTPD on a random free port
+- UnixSocketServerTest drives the real socket transport over temp-dir sockets (TCP never started) and covers stop→start rebinding
+- McpServerManagerTest pins the busy-TCP-port lifecycle: socket keeps serving, restart rebinds both listeners
+- LiveBurpIT (`mvn test -Dtest=LiveBurpIT`, needs Burp + extension on
+  BURP_MCP_TEST_BASE_URL, default 127.0.0.1:4444; BURP_MCP_TEST_AUTH_TOKEN
+  for Bearer; BURP_MCP_TEST_ALLOW_SCANS=1 for the crawl characterization).
+  Spins its own loopback HTTP+TLS targets, scope-churns one unique subtree
+  (cleaned up), skips gracefully when Burp is unreachable. Honors 429s.
 - MontoyaApi is mocked via `java.lang.reflect.Proxy` (survives API version bumps)
 - Preferences use ConcurrentHashMap-backed in-memory store for test isolation
 - Always read error responses from `conn.getErrorStream()`. `getInputStream()` throws on 4xx/5xx
@@ -202,3 +213,5 @@ All persisted via `api.persistence().preferences()`. See `McpConfig.java` for de
 | `tls_mode` | self_signed | self_signed/custom |
 | `tls_keystore_path` | — | PKCS12 path |
 | `tls_keystore_password` | burpmcp | string |
+| `socket_enabled` | true | boolean (Unix socket alongside TCP) |
+| `socket_path` | — (auto) | explicit path, or empty = next to the `.burp` project file (temp path for temporary projects) |

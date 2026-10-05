@@ -33,6 +33,7 @@ public class McpToolRegistry {
     public void registerAllTools() {
         // Phase 0: Info
         register(new BurpInfoTool(api));
+        register(new ProjectCreateTool(api));
 
         // Phase 1: HTTP tools
         register(new HttpSendRequestTool(api));
@@ -64,6 +65,8 @@ public class McpToolRegistry {
         register(new HttpSendToIntruderTool(api));
         register(new HttpSendToComparerTool(api));
         register(new HttpSendToDecoderTool(api));
+        register(new HttpSendToOrganizerTool(api));
+        register(new OrganizerListTool(api));
         register(new CookieListTool(api));
         register(new CookieSetTool(api));
         register(new HttpDiffResponsesTool(api));
@@ -72,10 +75,13 @@ public class McpToolRegistry {
         // Phase 4: Scanner (Pro only)
         register(new ScannerStartAuditTool(api));
         register(new ScannerStartCrawlTool(api));
+        register(new ScannerCrawlStatusTool(api));
+        register(new ScannerCrawlStopTool(api));
         register(new ScannerIssuesListTool(api));
         register(new ScannerIssuesListFilteredTool(api));
         register(new ScannerGetIssueTool(api));
         register(new ScannerGenerateReportTool(api));
+        register(new ScannerBcheckImportTool(api));
 
         // Phase 5: Collaborator (Pro only), config, logger
         register(new CollaboratorGeneratePayloadTool(api));
@@ -90,6 +96,10 @@ public class McpToolRegistry {
 
         // v1.2: WebSocket + proxy management
         register(new WebSocketHistoryGetTool(api));
+
+        // Tasks engine (pause/resume Spider + Scanner)
+        register(new TaskEngineStatusTool(api));
+        register(new TaskEngineSetTool(api));
     }
 
     /**

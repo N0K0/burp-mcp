@@ -25,7 +25,7 @@ public class BurpInfoTool implements Tool {
     public ToolDefinition definition() {
         return new ToolDefinition(
                 "burp_info",
-                "Returns information about the Burp Suite instance: version, edition, and MCP server status.",
+                "Returns information about the Burp Suite instance: version, edition, current project (name/id), and MCP server status. Note: Burp projects cannot be created via the API — launch Burp with --project-file=<path> for a fresh project.",
                 inputSchema()
         );
     }
@@ -48,6 +48,16 @@ public class BurpInfoTool implements Tool {
         result.put("burpEdition", api.burpSuite().version().edition().name());
         result.put("burpIsProfessional", api.burpSuite().version().edition().name().equals("PROFESSIONAL"));
 
+        // Current project (read-only in Montoya — no create/open API)
+        try {
+            if (api.project() != null) {
+                result.put("projectName", api.project().name());
+                result.put("projectId", api.project().id());
+            }
+        } catch (Exception ignored) {
+            // Project unavailable (e.g. mocked API in tests) — omit fields
+        }
+
         // MCP server info
         result.put("mcpServerVersion", burp.mcp.util.VersionInfo.getVersion());
         result.put("mcpServerBuildTs", burp.mcp.util.VersionInfo.getBuildTimestamp());
@@ -57,6 +67,10 @@ public class BurpInfoTool implements Tool {
         // Runtime info
         result.put("javaVersion", System.getProperty("java.version"));
         result.put("port", burp.mcp.util.McpConfig.getInstance().getPort());
+        String socketPath = burp.mcp.util.McpConfig.getActiveSocketPath();
+        if (socketPath != null) {
+            result.put("mcpSocketPath", socketPath);
+        }
 
         return result;
     }

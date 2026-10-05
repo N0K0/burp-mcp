@@ -2,7 +2,7 @@ package burp.mcp;
 
 import burp.api.montoya.BurpExtension;
 import burp.api.montoya.MontoyaApi;
-import burp.mcp.server.McPServer;
+import burp.mcp.server.McpServerManager;
 import burp.mcp.tool.BurpMetricsTool;
 import burp.mcp.tool.McpToolRegistry;
 import burp.mcp.ui.McpUiPanel;
@@ -11,12 +11,11 @@ import burp.mcp.util.ErrorLogger;
 import burp.mcp.util.MetricsCollector;
 import burp.mcp.util.PermissionManager;
 import burp.mcp.util.RequestCache;
-import burp.mcp.util.TlsManager;
 import burp.mcp.util.VersionInfo;
 
 public class BurpMcpExtension implements BurpExtension {
 
-    private McPServer server;
+    private McpServerManager serverManager;
     private McpToolRegistry registry;
     private MetricsCollector metrics;
 
@@ -87,10 +86,12 @@ public class BurpMcpExtension implements BurpExtension {
 
         PermissionManager perms = new PermissionManager();
 
+        // ── Server lifecycle (start/stop/restart also available in the UI) ──
+        serverManager = new McpServerManager(api, registry, perms, metrics);
+
         // ── UI ──
-        McpUiPanel uiPanel = null;
         try {
-            uiPanel = new McpUiPanel(api, registry, perms);
+            McpUiPanel uiPanel = new McpUiPanel(api, registry, perms, serverManager);
             api.userInterface().registerSuiteTab("Burp MCP", uiPanel);
             api.logging().logToOutput("[burp-mcp] UI tab registered.");
         } catch (Exception e) {
@@ -98,39 +99,12 @@ public class BurpMcpExtension implements BurpExtension {
             ErrorLogger.log("UI/register", e);
         }
 
-        // ── Server ──
-        server = new McPServer(api, registry, config.getBindAddress(), config.getPort(), perms, metrics);
-        try {
-            if (config.isTlsEnabled()) {
-                String mode = config.getTlsMode();
-                String cn = config.getBindAddress();
-                char[] pw = config.getTlsKeystorePassword().toCharArray();
-                javax.net.ssl.SSLServerSocketFactory ssl;
-                if ("custom".equals(mode)) {
-                    if (config.getTlsKeystorePath().isEmpty()) {
-                        throw new IllegalStateException("tls_mode=custom requires tls_keystore_path");
-                    }
-                    ssl = TlsManager.createFromKeystore(config.getTlsKeystorePath(), pw);
-                } else if (!"self_signed".equals(mode)) {
-                    throw new IllegalStateException("Unknown tls_mode: " + mode);
-                } else {
-                    ssl = TlsManager.createSelfSigned(cn, pw);
-                }
-                // Clear password copy as soon as possible.
-                java.util.Arrays.fill(pw, '\0');
-                server.enableTls(ssl, "TLSv1.2", "TLSv1.3");
-            }
-            server.start();
-            String proto = config.isTlsEnabled() ? "https" : "http";
-            api.logging().logToOutput("[burp-mcp] Server started on " + proto + "://" + config.getBindAddress() + ":" + config.getPort());
-            if (uiPanel != null) uiPanel.setServer(server);
-        } catch (Exception e) {
-            api.logging().logToError("[burp-mcp] Server start failed", e);
-            ErrorLogger.log("Startup", e);
-        }
+        serverManager.start();
 
         api.extension().registerUnloadingHandler(() -> {
-            if (server != null) server.stop();
+            if (serverManager != null) {
+                serverManager.stop();
+            }
         });
     }
 

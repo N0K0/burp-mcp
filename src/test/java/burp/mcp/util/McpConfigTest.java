@@ -92,4 +92,85 @@ class McpConfigTest {
             cfg.setTlsKeystorePath(prevPath);
         }
     }
+
+    @Test
+    void socket_defaults_shouldBeEnabledWithTmpFallback() {
+        McpConfig cfg = McpConfig.getInstance();
+        java.util.function.Function<String, String> noPrefs = key -> null;
+        assertThat(cfg.isSocketEnabled()).isTrue();
+        assertThat(cfg.getSocketPath()).isEmpty();
+        assertThat(cfg.resolveSocketPath("proj-a", "id-a", noPrefs).toString())
+                .contains("burp-mcp-").endsWith(".sock");
+        // Stable per project, distinct across projects.
+        assertThat(cfg.resolveSocketPath("proj-a", "id-a", noPrefs))
+                .isEqualTo(cfg.resolveSocketPath("proj-a", "id-a", noPrefs));
+        assertThat(cfg.resolveSocketPath("proj-a", "id-a", noPrefs))
+                .isNotEqualTo(cfg.resolveSocketPath("proj-b", "id-b", noPrefs));
+    }
+
+    @Test
+    void socket_projectFileMatch_shouldSitNextToProject() {
+        java.util.Map<String, String> prefs = new java.util.HashMap<>();
+        prefs.put("burp.suite.recentProjectFiles0",
+                "/home/nikolas/burp-projects/exness-20261004.burp");
+        prefs.put("burp.suite.recentProjectNames0", "exness-20261004.burp");
+        assertThat(McpConfig.getInstance()
+                .resolveSocketPath("exness-20261004.burp", "id", prefs::get))
+                .isEqualTo(java.nio.file.Paths.get(
+                        "/home/nikolas/burp-projects/exness-20261004.sock"));
+    }
+
+    @Test
+    void socket_projectNameMatchesRecentName_shouldUseThatFile() {
+        // Burp records the display name separately from the file basename.
+        java.util.Map<String, String> prefs = new java.util.HashMap<>();
+        prefs.put("burp.suite.recentProjectFiles0",
+                "/home/nikolas/git/burp-mcp/target/2026-10-04-dyson.burp");
+        prefs.put("burp.suite.recentProjectNames0", "dyson");
+        assertThat(McpConfig.getInstance().resolveSocketPath("dyson", "id", prefs::get))
+                .isEqualTo(java.nio.file.Paths.get(
+                        "/home/nikolas/git/burp-mcp/target/2026-10-04-dyson.sock"));
+    }
+
+    @Test
+    void socket_explicitPath_shouldWinOverProjectFile() {
+        McpConfig cfg = McpConfig.getInstance();
+        String prev = cfg.getSocketPath();
+        cfg.setSocketPath("/tmp/explicit.sock");
+        try {
+            java.util.Map<String, String> prefs = java.util.Map.of(
+                    "burp.suite.recentProjectFiles0",
+                    "/home/nikolas/burp-projects/exness-20261004.burp");
+            assertThat(cfg.resolveSocketPath("exness-20261004.burp", "id", prefs::get))
+                    .isEqualTo(java.nio.file.Paths.get("/tmp/explicit.sock"));
+        } finally {
+            cfg.setSocketPath(prev);
+        }
+    }
+
+    @Test
+    void socket_tooLongSiblingPath_shouldFallBackToTmp() {
+        String longDir = "/tmp/" + "d".repeat(120);
+        java.util.Map<String, String> prefs = java.util.Map.of(
+                "burp.suite.recentProjectFiles0", longDir + "/proj.burp");
+        java.nio.file.Path resolved =
+                McpConfig.getInstance().resolveSocketPath("proj", "id", prefs::get);
+        assertThat(resolved.toString()).contains("burp-mcp-");
+        assertThat(resolved.toString()).doesNotContain("d".repeat(50));
+    }
+
+    @Test
+    void validate_longExplicitSocketPath_shouldFail() {
+        McpConfig cfg = McpConfig.getInstance();
+        String prev = cfg.getSocketPath();
+        boolean prevEnabled = cfg.isSocketEnabled();
+        cfg.setSocketEnabled(true);
+        cfg.setSocketPath("/tmp/" + "x".repeat(200) + ".sock");
+        try {
+            assertThat(cfg.validate()).anyMatch(e -> e.contains("Socket path"));
+        } finally {
+            cfg.setSocketPath(prev);
+            cfg.setSocketEnabled(prevEnabled);
+        }
+    }
 }

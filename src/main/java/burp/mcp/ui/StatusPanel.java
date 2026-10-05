@@ -1,6 +1,6 @@
 package burp.mcp.ui;
 
-import burp.mcp.server.McPServer;
+import burp.mcp.server.McpServerManager;
 import burp.mcp.util.McpConfig;
 import burp.mcp.util.MetricsCollector;
 import burp.mcp.util.VersionInfo;
@@ -15,16 +15,18 @@ import java.awt.*;
 import java.awt.datatransfer.StringSelection;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.file.Path;
 
 /**
- * Panel showing server status, metrics dashboard, and request log
- * with search, filtering, and export capabilities.
+ * Panel showing server status, lifecycle controls, metrics dashboard, and
+ * request log with search, filtering, and export capabilities.
  */
 public class StatusPanel extends JPanel {
 
-    private final JLabel serverStatusLabel;
+    private final JLabel tcpStatusLabel;
+    private final JLabel socketStatusLabel;
+    private final JLabel bindLabel;
     private final JLabel portLabel;
-    private final JLabel addressLabel;
     private final JLabel requestCountLabel;
     private final JLabel requestRateLabel;
     private final JLabel errorRateLabel;
@@ -32,13 +34,19 @@ public class StatusPanel extends JPanel {
     private final JLabel uptimeLabel;
     private final JLabel rateLimitedLabel;
 
+    private final JButton startBtn;
+    private final JButton stopBtn;
+    private final JButton restartBtn;
+    private final JButton copySocketBtn;
+
     private final JTextArea logArea;
     private final JTextField searchField;
     private final JComboBox<String> levelFilterCombo;
     private final JCheckBox autoScrollCheck;
     private final Timer refreshTimer;
 
-    private McPServer server;
+    private McpServerManager manager;
+    private volatile boolean lifecycleBusy;
     private String currentLevelFilter = "";
 
     // Pre-initialize logArea so inner classes in the toolbar can reference it
@@ -72,15 +80,52 @@ public class StatusPanel extends JPanel {
         gbc.weightx = 1.0;
 
         int row = 0;
-        serverStatusLabel = addInfoRow(dashboardPanel, gbc, row++, "Status:", "Starting...");
+        tcpStatusLabel = addInfoRow(dashboardPanel, gbc, row++, "TCP:", "Starting...");
+        socketStatusLabel = addInfoRow(dashboardPanel, gbc, row++, "Socket:", "Starting...");
         uptimeLabel = addInfoRow(dashboardPanel, gbc, row++, "Uptime:", "0s");
-        addressLabel = addInfoRow(dashboardPanel, gbc, row++, "Bind:", McpConfig.getInstance().getBindAddress());
+        bindLabel = addInfoRow(dashboardPanel, gbc, row++, "Bind:", McpConfig.getInstance().getBindAddress());
         portLabel = addInfoRow(dashboardPanel, gbc, row++, "Port:", String.valueOf(McpConfig.getInstance().getPort()));
         requestCountLabel = addInfoRow(dashboardPanel, gbc, row++, "Requests:", "0");
         requestRateLabel = addInfoRow(dashboardPanel, gbc, row++, "Req/min:", "0");
         p95Label = addInfoRow(dashboardPanel, gbc, row++, "P95:", "0ms");
         errorRateLabel = addInfoRow(dashboardPanel, gbc, row++, "Errors:", "0");
         rateLimitedLabel = addInfoRow(dashboardPanel, gbc, row++, "Rate Ltd:", "0");
+
+        // ── Lifecycle controls ──
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        startBtn = new JButton("Start");
+        startBtn.setToolTipText("Bind TCP and the Unix socket using the saved settings");
+        startBtn.addActionListener(e -> runLifecycle(manager::start));
+        stopBtn = new JButton("Stop");
+        stopBtn.setToolTipText("Stop both listeners (in-flight requests are dropped)");
+        stopBtn.addActionListener(e -> runLifecycle(manager::stop));
+        restartBtn = new JButton("Restart");
+        restartBtn.setToolTipText("Re-read saved settings and rebind both listeners");
+        restartBtn.addActionListener(e -> runLifecycle(manager::restart));
+        copySocketBtn = new JButton("Copy Socket Path");
+        copySocketBtn.setToolTipText("Copy the live Unix socket path (empty when stopped)");
+        copySocketBtn.addActionListener(e -> {
+            Path path = manager != null ? manager.getSocketPath() : null;
+            if (path != null) {
+                Toolkit.getDefaultToolkit().getSystemClipboard()
+                        .setContents(new StringSelection(path.toString()), null);
+            }
+        });
+        controls.add(startBtn);
+        controls.add(stopBtn);
+        controls.add(restartBtn);
+        controls.add(copySocketBtn);
+
+        JLabel hint = new JLabel("Settings changes apply on Restart.");
+        hint.setFont(hint.getFont().deriveFont(Font.ITALIC, 11));
+        hint.setForeground(GRAY);
+        controls.add(hint);
+
+        gbc.gridy = row;
+        gbc.gridx = 0;
+        gbc.gridwidth = 2;
+        dashboardPanel.add(controls, gbc);
+        gbc.gridwidth = 1;
 
         // ── Log section ──
         JPanel logPanel = new JPanel(new BorderLayout());
@@ -136,13 +181,48 @@ public class StatusPanel extends JPanel {
         add(dashboardPanel, BorderLayout.NORTH);
         add(logPanel, BorderLayout.CENTER);
 
+        setControlsEnabled(true);
         refreshTimer = new Timer(2000, e -> refresh());
     }
 
-    public void setServer(McPServer server) {
-        this.server = server;
+    public void setManager(McpServerManager manager) {
+        this.manager = manager;
+        manager.setLogListener(this::appendLog);
+        manager.addStateListener(this::refresh);
         refresh();
         refreshTimer.start();
+    }
+
+    /** Run start/stop/restart off the EDT so Burp never freezes. */
+    private void runLifecycle(Runnable operation) {
+        if (lifecycleBusy || manager == null) {
+            return;
+        }
+        lifecycleBusy = true;
+        setControlsEnabled(false);
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                operation.run();
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                lifecycleBusy = false;
+                setControlsEnabled(true);
+                refresh();
+            }
+        }.execute();
+    }
+
+    private void setControlsEnabled(boolean enabled) {
+        lifecycleBusy = !enabled;
+        boolean anyRunning = manager != null && manager.isRunning();
+        startBtn.setEnabled(enabled && !anyRunning);
+        stopBtn.setEnabled(enabled && anyRunning);
+        restartBtn.setEnabled(enabled);
+        copySocketBtn.setEnabled(enabled);
     }
 
     public void appendLog(String entry) {
@@ -209,20 +289,41 @@ public class StatusPanel extends JPanel {
     }
 
     private void refresh() {
-        if (server == null) return;
+        if (manager == null) return;
 
-        MetricsCollector m = server.getMetrics();
+        MetricsCollector m = manager.getMetrics();
         SwingUtilities.invokeLater(() -> {
-            boolean running = server.isRunning();
-            if (running) {
-                serverStatusLabel.setText("Running");
-                serverStatusLabel.setForeground(GREEN);
+            boolean tcpRunning = manager.isTcpRunning();
+            String tcpError = manager.getTcpError();
+            if (tcpRunning) {
+                tcpStatusLabel.setText("Listening on " + manager.getEndpoint());
+                tcpStatusLabel.setForeground(GREEN);
+            } else if (tcpError != null) {
+                tcpStatusLabel.setText("Failed: " + tcpError);
+                tcpStatusLabel.setForeground(RED);
             } else {
-                serverStatusLabel.setText("Stopped");
-                serverStatusLabel.setForeground(RED);
+                tcpStatusLabel.setText("Stopped");
+                tcpStatusLabel.setForeground(GRAY);
             }
 
-            requestCountLabel.setText(String.valueOf(server.getRequestCount()));
+            Path socketPath = manager.getSocketPath();
+            if (manager.isSocketRunning() && socketPath != null) {
+                socketStatusLabel.setText(socketPath.toString());
+                socketStatusLabel.setForeground(GREEN);
+                socketStatusLabel.setToolTipText("Unix socket: " + socketPath);
+            } else if (manager.getSocketError() != null) {
+                socketStatusLabel.setText("Failed: " + manager.getSocketError());
+                socketStatusLabel.setForeground(RED);
+            } else if (!McpConfig.getInstance().isSocketEnabled()) {
+                socketStatusLabel.setText("Disabled (Settings)");
+                socketStatusLabel.setForeground(GRAY);
+            } else {
+                socketStatusLabel.setText("Stopped");
+                socketStatusLabel.setForeground(GRAY);
+            }
+
+            requestCountLabel.setText(String.valueOf(manager.getServer() != null
+                    ? manager.getServer().getRequestCount() : 0));
 
             if (m != null) {
                 uptimeLabel.setText(formatUptime(m.getUptimeSeconds()));
@@ -232,8 +333,11 @@ public class StatusPanel extends JPanel {
                 rateLimitedLabel.setText(String.valueOf(m.getRateLimitedCount()));
             }
 
+            startBtn.setEnabled(!lifecycleBusy && !manager.isRunning());
+            stopBtn.setEnabled(!lifecycleBusy && manager.isRunning());
+
             portLabel.setText(String.valueOf(McpConfig.getInstance().getPort()));
-            addressLabel.setText(McpConfig.getInstance().getBindAddress());
+            bindLabel.setText(McpConfig.getInstance().getBindAddress());
         });
     }
 

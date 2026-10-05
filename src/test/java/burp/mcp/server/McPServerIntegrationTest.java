@@ -8,6 +8,7 @@ import burp.api.montoya.extension.Extension;
 import burp.api.montoya.logging.Logging;
 import burp.api.montoya.persistence.Persistence;
 import burp.api.montoya.persistence.Preferences;
+import burp.api.montoya.project.Project;
 import burp.mcp.tool.McpToolRegistry;
 import burp.mcp.util.McpConfig;
 import burp.mcp.util.McpJson;
@@ -110,6 +111,8 @@ class McPServerIntegrationTest {
         assertThat(info.has("burpVersion")).isTrue();
         assertThat(info.has("mcpServerVersion")).isTrue();
         assertThat(info.has("port")).isTrue();
+        assertThat(info.get("projectName").asText()).isEqualTo("Test Project");
+        assertThat(info.get("projectId").asText()).isEqualTo("test-project-id");
     }
 
     @Test
@@ -450,6 +453,19 @@ class McPServerIntegrationTest {
                                     });
                             }
                             return null;
+                        });
+                }
+                // Stub project() for burp_info project fields
+                if ("project".equals(methodName)) {
+                    return java.lang.reflect.Proxy.newProxyInstance(
+                        Project.class.getClassLoader(),
+                        new Class<?>[] { Project.class },
+                        (p2, m2, a2) -> {
+                            switch (m2.getName()) {
+                                case "name": return "Test Project";
+                                case "id": return "test-project-id";
+                                default: return null;
+                            }
                         });
                 }
                 // Stub logging for quiet operation

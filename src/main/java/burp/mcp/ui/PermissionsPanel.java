@@ -41,7 +41,7 @@ public class PermissionsPanel extends JPanel {
 
     private static final LinkedHashMap<String, String[]> CATEGORIES = new LinkedHashMap<>();
     static {
-        CATEGORIES.put("Info & Metrics", new String[]{"burp_info", "burp_metrics", "config_list_preferences"});
+        CATEGORIES.put("Info & Metrics", new String[]{"burp_info", "burp_metrics", "config_list_preferences", "project_"});
         CATEGORIES.put("HTTP Request/Response", new String[]{"http_", "logger_add"});
         CATEGORIES.put("Proxy & WebSocket", new String[]{"proxy_", "websocket_"});
         CATEGORIES.put("Sitemap & Scope", new String[]{"sitemap_", "scope_"});
@@ -49,6 +49,8 @@ public class PermissionsPanel extends JPanel {
         CATEGORIES.put("Config", new String[]{"config_get", "config_set"});
         CATEGORIES.put("Scanner", new String[]{"scanner_"});
         CATEGORIES.put("Collaborator", new String[]{"collaborator_"});
+        CATEGORIES.put("Organizer", new String[]{"organizer_"});
+        CATEGORIES.put("Task Engine", new String[]{"task_engine_"});
     }
 
     public PermissionsPanel(MontoyaApi api, PermissionManager permissions, McpToolRegistry registry) {
@@ -75,7 +77,7 @@ public class PermissionsPanel extends JPanel {
         topPanel.add(presetCombo, g);
 
         g.gridwidth = 2; g.gridx = 0; g.gridy = 1;
-        sensitivityCheck = new JCheckBox("Block sensitive ops (scope_set, config_set, scanner_*, proxy_toggle_intercept)");
+        sensitivityCheck = new JCheckBox("Block sensitive ops (scope_set, config_set, scanner_*, task_engine_set, proxy_toggle_intercept)");
         sensitivityCheck.setSelected(permissions.isBlockSensitive());
         sensitivityCheck.addActionListener(e -> { applyPreset(); });
         topPanel.add(sensitivityCheck, g);

@@ -17,7 +17,7 @@ public class MetricsCollector {
     private static final int RATE_WINDOW_SECONDS = 60;
     private static final int RATE_SLOTS = 60; // 1-second granularity
 
-    private final long startTimeMs = System.currentTimeMillis();
+    private volatile long startTimeMs = System.currentTimeMillis();
 
     // Request counts
     private final LongAdder totalRequests = new LongAdder();
@@ -109,6 +109,11 @@ public class MetricsCollector {
 
     public long getUptimeSeconds() {
         return (System.currentTimeMillis() - startTimeMs) / 1000;
+    }
+
+    /** Restart the uptime clock (listener restarted from the UI). */
+    public void resetUptime() {
+        startTimeMs = System.currentTimeMillis();
     }
 
     public long getTotalRequests() {

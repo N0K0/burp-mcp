@@ -43,6 +43,16 @@ public class TlsManager {
      */
     public static SSLServerSocketFactory createSelfSigned(String cn, char[] password)
             throws Exception {
+        return createSelfSignedContext(cn, password).getServerSocketFactory();
+    }
+
+    /**
+     * Create an SSLContext with an in-memory self-signed certificate.
+     * Shared by the server socket factory above and integration tests
+     * that need a local TLS target.
+     */
+    public static SSLContext createSelfSignedContext(String cn, char[] password)
+            throws Exception {
         KeyStore ks = KeyStore.getInstance(KEYSTORE_TYPE);
         ks.load(null, password);
 
@@ -80,7 +90,7 @@ public class TlsManager {
         SSLContext ctx = SSLContext.getInstance("TLS");
         ctx.init(kmf.getKeyManagers(), null, new SecureRandom());
 
-        return ctx.getServerSocketFactory();
+        return ctx;
     }
 
     /**

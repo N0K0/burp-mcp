@@ -32,7 +32,7 @@ public class HttpSendRequestsTool implements Tool {
     public ToolDefinition definition() {
         return new ToolDefinition(
                 "http_send_requests",
-                "Send multiple HTTP requests in parallel and return their responses. Accepts a list of raw HTTP request strings and sends them concurrently.",
+                "Send multiple HTTP requests in parallel and return their responses. Accepts a list of raw HTTP request strings and sends them concurrently. Each entry must carry a Host header (used to derive the target service).",
                 inputSchema()
         );
     }
@@ -80,7 +80,12 @@ public class HttpSendRequestsTool implements Tool {
             }
             String rawRequest = (String) item;
             try {
-                requests.add(HttpRequest.httpRequest(rawRequest));
+                requests.add(HttpSendRequestTool.ensureService(
+                        HttpRequest.httpRequest(rawRequest), null));
+            } catch (McpError e) {
+                // Prefix with index for batch debuggability, preserving code.
+                throw new McpError(e.getCode(),
+                        "Request at index " + i + ": " + e.getMessage());
             } catch (Exception e) {
                 throw new McpError(McpError.INVALID_HTTP_REQUEST,
                         "Failed to parse request at index " + i + ": " + e.getMessage());

@@ -62,6 +62,8 @@ public class LoggerAddTool implements Tool {
             throw new McpError(McpError.INVALID_HTTP_REQUEST,
                     "Failed to parse raw HTTP request: " + e.getMessage());
         }
+        // Sending needs a usable target service; derive from Host header.
+        request = HttpSendRequestTool.ensureService(request, null);
 
         // Send the request to get a response
         HttpRequestResponse result;

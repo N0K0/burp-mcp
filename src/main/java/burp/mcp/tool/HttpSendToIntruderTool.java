@@ -60,6 +60,8 @@ public class HttpSendToIntruderTool implements Tool {
             throw new McpError(McpError.INVALID_HTTP_REQUEST,
                     "Failed to parse raw HTTP request: " + e.getMessage());
         }
+        // Intruder needs a usable target service; derive from Host header.
+        request = HttpSendRequestTool.ensureService(request, null);
 
         try {
             api.intruder().sendToIntruder(request, "");

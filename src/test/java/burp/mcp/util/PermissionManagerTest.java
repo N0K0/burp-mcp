@@ -100,6 +100,9 @@ class PermissionManagerTest {
         assertThat(pm.checkAccess("config_list_preferences")).isNull();
         assertThat(pm.checkAccess("websocket_history_get")).isNull();
         assertThat(pm.checkAccess("burp_metrics")).isNull();
+        assertThat(pm.checkAccess("organizer_list")).isNull();
+        assertThat(pm.checkAccess("task_engine_status")).isNull();
+        assertThat(pm.checkAccess("scanner_crawl_status")).isNull();
     }
 
     @Test
@@ -108,6 +111,8 @@ class PermissionManagerTest {
         assertThat(PermissionManager.isSensitive("config_set")).isTrue();
         assertThat(PermissionManager.isSensitive("scanner_start_audit")).isTrue();
         assertThat(PermissionManager.isSensitive("scanner_start_crawl")).isTrue();
+        assertThat(PermissionManager.isSensitive("scanner_bcheck_import")).isTrue();
+        assertThat(PermissionManager.isSensitive("task_engine_set")).isTrue();
         assertThat(PermissionManager.isSensitive("proxy_toggle_intercept")).isTrue();
 
         assertThat(PermissionManager.isSensitive("burp_info")).isFalse();

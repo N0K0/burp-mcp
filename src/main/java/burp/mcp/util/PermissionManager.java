@@ -36,12 +36,16 @@ public class PermissionManager {
     /** Tools that only read/query — safe for READ_ONLY mode. */
     private static final Set<String> READ_TOOLS = Set.of(
         "burp_info",
+        "project_create",
         "burp_metrics",
+        "scanner_crawl_status",
         "sitemap_list", "sitemap_list_filtered", "sitemap_get", "sitemap_search",
         "proxy_history_list", "proxy_history_get", "proxy_websocket_history_list",
         "websocket_history_get",
         "proxy_intercept_status",
         "scope_check", "scope_list",
+        "organizer_list",
+        "task_engine_status",
         "cookie_list",
         "decoder_decode", "decoder_encode",
         "http_parse_request", "http_parse_response",
@@ -58,6 +62,9 @@ public class PermissionManager {
         "config_set",          // imports configuration
         "scanner_start_audit", // launches active scans
         "scanner_start_crawl", // launches crawls
+        "scanner_crawl_stop", // stops crawls
+        "scanner_bcheck_import", // installs custom scan checks
+        "task_engine_set", // pauses/resumes all Burp tasks
         "proxy_toggle_intercept" // toggles proxy state
     );
 

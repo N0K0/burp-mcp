@@ -13,8 +13,8 @@ class McpToolRegistryTest {
     }
 
     @Test
-    void registerAllTools_shouldRegister44Tools() {
-        assertThat(registry().toolCount()).isEqualTo(44);
+    void registerAllTools_shouldRegister52Tools() {
+        assertThat(registry().toolCount()).isEqualTo(52);
     }
 
     @Test

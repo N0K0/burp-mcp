@@ -1,7 +1,7 @@
 package burp.mcp.ui;
 
 import burp.api.montoya.MontoyaApi;
-import burp.mcp.server.McPServer;
+import burp.mcp.server.McpServerManager;
 import burp.mcp.tool.McpToolRegistry;
 import burp.mcp.util.PermissionManager;
 
@@ -20,7 +20,8 @@ public class McpUiPanel extends JPanel {
     private final PermissionsPanel permissionsPanel;
     private final MessageViewerPanel messageViewerPanel;
 
-    public McpUiPanel(MontoyaApi api, McpToolRegistry registry, PermissionManager permissions) {
+    public McpUiPanel(MontoyaApi api, McpToolRegistry registry, PermissionManager permissions,
+                      McpServerManager serverManager) {
         setLayout(new BorderLayout());
 
         // Create panels (each wrapped for safety)
@@ -46,11 +47,8 @@ public class McpUiPanel extends JPanel {
         footer.setForeground(Color.GRAY);
         footer.setBorder(BorderFactory.createEmptyBorder(2, 5, 2, 5));
         add(footer, BorderLayout.SOUTH);
-    }
 
-    public void setServer(McPServer server) {
-        statusPanel.setServer(server);
-        server.setLogListener(statusPanel::appendLog);
+        statusPanel.setManager(serverManager);
     }
 
     public StatusPanel getStatusPanel() { return statusPanel; }

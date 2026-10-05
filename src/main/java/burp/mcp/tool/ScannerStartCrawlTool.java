@@ -26,7 +26,7 @@ public class ScannerStartCrawlTool extends ScannerBase implements Tool {
     public ToolDefinition definition() {
         return new ToolDefinition(
                 "scanner_start_crawl",
-                "Start a site crawl from seed URLs. Provide 'seed_urls' as an array of URL strings. Requires Burp Suite Professional.",
+                "Start a site crawl from seed URLs. Provide 'seed_urls' as an array of URL strings. Returns a crawl_id for tracking. Requires Burp Suite Professional. NOTE: current Burp versions run the crawl but its statusMessage() is unimplemented — poll progress with scanner_crawl_status (request/error counts) and stop with scanner_crawl_stop.",
                 inputSchema()
         );
     }
@@ -85,13 +85,39 @@ public class ScannerStartCrawlTool extends ScannerBase implements Tool {
             CrawlConfiguration crawlConfig = CrawlConfiguration.crawlConfiguration(seedUrls);
             crawl = api.scanner().startCrawl(crawlConfig);
         } catch (Exception e) {
-            throw new McpError(McpError.INTERNAL_ERROR,
-                    "Failed to start crawl: " + e.getMessage());
+            throw crawlError(e);
         }
 
+        // Burp runs the crawl but its statusMessage() is unimplemented,
+        // so degrade the status fields instead of masking a live task.
         ObjectNode result = McpJson.createObjectNode();
-        result.put("statusMessage", crawl.statusMessage());
-        result.put("requestCount", crawl.requestCount());
+        result.put("crawl_id", burp.mcp.util.CrawlTracker.track(crawl));
+        try {
+            result.put("statusMessage", crawl.statusMessage());
+            result.put("requestCount", crawl.requestCount());
+        } catch (Exception e) {
+            result.put("started", true);
+            result.put("status_unavailable",
+                    "Crawl status text is not implemented by this Burp version: " + e.getMessage()
+                    + ". Poll scanner_crawl_status for request/error counts.");
+        }
         return result;
+    }
+
+    private McpError crawlError(Exception e) {
+        String msg = String.valueOf(e.getMessage());
+        if (msg.toLowerCase(java.util.Locale.ROOT).contains("not yet implemented")) {
+            String burpVersion = "unknown";
+            try {
+                burpVersion = api.burpSuite().version().name();
+            } catch (Exception ignored) {
+            }
+            return new McpError(McpError.INTERNAL_ERROR,
+                    "Burp Suite (" + burpVersion + ") has not implemented crawl-only tasks via the API"
+                    + " (upstream Montoya docs still mark Crawl as 'not yet implemented')."
+                    + " For discovery use scanner_start_audit on seed URLs, or map via proxy traffic.");
+        }
+        return new McpError(McpError.INTERNAL_ERROR,
+                "Failed to start crawl: " + msg);
     }
 }

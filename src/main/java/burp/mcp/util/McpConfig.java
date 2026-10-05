@@ -48,7 +48,7 @@ public class McpConfig {
     // ── Environment variable overrides ──
 
     // Documented overrides (see README): BURP_MCP_PORT, BURP_MCP_BIND_ADDRESS,
-    // BURP_MCP_AUTH_TOKEN, BURP_MCP_LOG_LEVEL. Env wins over stored prefs
+    // BURP_MCP_AUTH_TOKEN, BURP_MCP_LOG_LEVEL, BURP_MCP_SOCKET_PATH. Env wins over stored prefs
     // so containers and CI can configure without touching Burp preferences.
 
     private static String envOrDefault(String key, String defaultVal) {
@@ -318,6 +318,109 @@ public class McpConfig {
         preferences.setString("tls_keystore_password", password);
     }
 
+    // ── Unix domain socket ────────────────────────────────────────
+    // Local-socket transport alongside TCP. The default path sits next to
+    // the .burp project file (same directory, same basename, .sock), so the
+    // socket is easy to find and multiple Burp projects never clash on ports.
+    // Temporary projects, unresolvable project files, and over-long paths
+    // fall back to a stable per-project socket in the temp dir.
+
+    public boolean isSocketEnabled() {
+        String val = preferences.getString("socket_enabled");
+        return val == null || Boolean.parseBoolean(val);
+    }
+
+    /**
+     * Explicit socket path, or "" for automatic per-project path.
+     * {@code BURP_MCP_SOCKET_PATH} env var wins over stored prefs.
+     */
+    public String getSocketPath() {
+        String env = System.getenv("BURP_MCP_SOCKET_PATH");
+        if (env != null && !env.isBlank()) {
+            return env.trim();
+        }
+        String val = preferences.getString("socket_path");
+        return val != null ? val : "";
+    }
+
+    public void setSocketEnabled(boolean enabled) {
+        preferences.setString("socket_enabled", String.valueOf(enabled));
+    }
+
+    public void setSocketPath(String path) {
+        preferences.setString("socket_path", path != null ? path : "");
+    }
+
+    /**
+     * Automatic socket path for a project tag (project id or similar).
+     * Short hashed name keeps well under OS socket-path limits.
+     */
+    public static java.nio.file.Path defaultSocketPath(String tag) {
+        String safe = shortTag(tag);
+        return java.nio.file.Paths.get(
+                System.getProperty("java.io.tmpdir"), "burp-mcp-" + safe + ".sock");
+    }
+
+    /**
+     * Resolve the effective socket path: an explicit config wins, otherwise a
+     * socket next to the current project file, otherwise a stable temporary
+     * per-project path.
+     */
+    public java.nio.file.Path resolveSocketPath(String projectName, String projectId) {
+        return resolveSocketPath(projectName, projectId, ProjectFiles.burpPrefLookup());
+    }
+
+    /** Test seam: the same resolution against an injected preference lookup. */
+    java.nio.file.Path resolveSocketPath(String projectName, String projectId,
+                                         java.util.function.Function<String, String> prefLookup) {
+        String configured = getSocketPath();
+        if (configured != null && !configured.isBlank()) {
+            return java.nio.file.Paths.get(configured.trim());
+        }
+        java.util.Optional<java.nio.file.Path> projectFile =
+                ProjectFiles.locate(projectName, prefLookup);
+        if (projectFile.isPresent()) {
+            java.nio.file.Path sibling = ProjectFiles.socketPathFor(projectFile.get());
+            if (ProjectFiles.isUsableSocketPath(sibling)) {
+                return sibling;
+            }
+        }
+        String tag = (projectId != null && !projectId.isBlank())
+                ? projectId : "port-" + getPort();
+        return defaultSocketPath(tag);
+    }
+
+    private static String shortTag(String tag) {
+        if (tag == null || tag.isBlank()) {
+            return "default";
+        }
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(tag.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(12);
+            for (int i = 0; i < 6; i++) {
+                sb.append(String.format("%02x", digest[i]));
+            }
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return String.valueOf(Math.abs(tag.hashCode()));
+        }
+    }
+
+    // ── Active socket discovery ───────────────────────────────────
+    // Set by the extension on successful socket bind so tools
+    // (burp_info) and agents can discover the live socket path.
+
+    private static volatile String activeSocketPath;
+
+    public static void setActiveSocketPath(String path) {
+        activeSocketPath = path;
+    }
+
+    public static String getActiveSocketPath() {
+        return activeSocketPath;
+    }
+
     public static synchronized RequestCache getRequestCache() {
         if (requestCache == null) {
             throw new IllegalStateException("RequestCache not initialized. Ensure McpConfig is initialized first.");
@@ -357,6 +460,12 @@ public class McpConfig {
         if (isTlsEnabled() && "custom".equals(tlsMode) && getTlsKeystorePath().isEmpty()) errors.add("TLS keystore path must not be empty in custom mode");
         String logPath = getLoggingFilePath();
         if (logPath != null && logPath.contains("..")) errors.add("Logging file path must not contain '..'");
+        if (isSocketEnabled()) {
+            String sp = getSocketPath();
+            if (sp != null && !sp.isBlank() && sp.length() > 100) {
+                errors.add("Socket path must be < 100 chars (OS socket-path limit), got " + sp.length());
+            }
+        }
         return errors;
     }
 }

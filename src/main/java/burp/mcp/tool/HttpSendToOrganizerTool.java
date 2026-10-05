@@ -11,21 +11,21 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.Map;
 
 /**
- * Send an HTTP request to the Repeater tool.
+ * Send an HTTP request to Burp Organizer for manual follow-up.
  */
-public class HttpSendToRepeaterTool implements Tool {
+public class HttpSendToOrganizerTool implements Tool {
 
     private final MontoyaApi api;
 
-    public HttpSendToRepeaterTool(MontoyaApi api) {
+    public HttpSendToOrganizerTool(MontoyaApi api) {
         this.api = api;
     }
 
     @Override
     public ToolDefinition definition() {
         return new ToolDefinition(
-                "http_send_to_repeater",
-                "Send an HTTP request to Burp Repeater for manual analysis. Provide 'raw_request' (raw HTTP request string) and optionally 'tab_name' to label the Repeater tab.",
+                "http_send_to_organizer",
+                "Send an HTTP request to Burp Organizer to stash it for manual follow-up. Provide 'raw_request' (raw HTTP request string with a Host header).",
                 inputSchema()
         );
     }
@@ -37,7 +37,6 @@ public class HttpSendToRepeaterTool implements Tool {
 
         ObjectNode props = McpJson.createObjectNode();
         props.set("raw_request", McpJson.property("string", "Full raw HTTP request string (method, headers, body)"));
-        props.set("tab_name", McpJson.property("string", "Optional label for the Repeater tab"));
         schema.set("properties", props);
 
         ArrayNode required = McpJson.createArrayNode();
@@ -61,24 +60,18 @@ public class HttpSendToRepeaterTool implements Tool {
             throw new McpError(McpError.INVALID_HTTP_REQUEST,
                     "Failed to parse raw HTTP request: " + e.getMessage());
         }
-        // Repeater needs a usable target service; derive from Host header.
+        // Organizer needs a usable target service; derive from Host header.
         request = HttpSendRequestTool.ensureService(request, null);
 
-        String tabName = (String) args.get("tab_name");
-        if (tabName == null || tabName.isEmpty()) {
-            tabName = "";
-        }
-
         try {
-            api.repeater().sendToRepeater(request, tabName);
+            api.organizer().sendToOrganizer(request);
         } catch (Exception e) {
             throw new McpError(McpError.INTERNAL_ERROR,
-                    "Failed to send request to Repeater: " + e.getMessage());
+                    "Failed to send request to Organizer: " + e.getMessage());
         }
 
         ObjectNode result = McpJson.createObjectNode();
         result.put("success", true);
-        result.put("tab_name", tabName);
         return result;
     }
 }

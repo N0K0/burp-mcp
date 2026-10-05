@@ -28,7 +28,7 @@ public class ScannerStartAuditTool extends ScannerBase implements Tool {
     public ToolDefinition definition() {
         return new ToolDefinition(
                 "scanner_start_audit",
-                "Start a vulnerability scan on one or more URLs. Provide 'url' (single string) or 'urls' (array of strings). Optional 'config' parameter: 'LEGACY_ACTIVE_AUDIT_CHECKS' (default) or 'LEGACY_PASSIVE_AUDIT_CHECKS'. Requires Burp Suite Professional.",
+                "Start a vulnerability scan on one or more URLs. Provide 'url' (single string) or 'urls' (array of strings). Optional 'config' parameter: 'LEGACY_ACTIVE_AUDIT_CHECKS' (default) or 'LEGACY_PASSIVE_AUDIT_CHECKS'. Optional 'headers' object (name-value pairs, e.g. cookies/auth tokens) applied to the seed requests. NOTE: Burp's scanner stamps its own stock User-Agent on the traffic it generates — a seed User-Agent survives only as the base value for UA-insertion-point checks, not as the outgoing UA. Requires Burp Suite Professional.",
                 inputSchema()
         );
     }
@@ -42,6 +42,7 @@ public class ScannerStartAuditTool extends ScannerBase implements Tool {
         props.set("url", McpJson.property("string", "Target URL (creates a GET request if used alone)"));
         props.set("urls", McpJson.property("array", "Array of URL strings to scan"));
         props.set("config", McpJson.property("string", "Audit configuration: 'LEGACY_ACTIVE_AUDIT_CHECKS' (default) or 'LEGACY_PASSIVE_AUDIT_CHECKS'", "LEGACY_ACTIVE_AUDIT_CHECKS"));
+        props.set("headers", McpJson.property("object", "Optional HTTP headers applied to the seed requests (e.g. cookies, auth tokens). Scanner-managed headers such as User-Agent are stamped over by Burp on generated traffic"));
         schema.set("properties", props);
 
         ArrayNode required = McpJson.createArrayNode();
@@ -114,8 +115,10 @@ public class ScannerStartAuditTool extends ScannerBase implements Tool {
         // Add URLs to audit
         for (String url : urls) {
             try {
-                HttpRequest request = HttpRequest.httpRequestFromUrl(url);
+                HttpRequest request = buildSeedRequest(url, args);
                 audit.addRequest(request);
+            } catch (McpError e) {
+                throw e;
             } catch (Exception e) {
                 throw new McpError(McpError.INVALID_PARAMS,
                         "Failed to add URL to audit: " + url + " - " + e.getMessage());
@@ -127,5 +130,31 @@ public class ScannerStartAuditTool extends ScannerBase implements Tool {
         result.put("insertionPointCount", audit.insertionPointCount());
         result.put("requestCount", audit.requestCount());
         return result;
+    }
+
+    /**
+     * Build an audit seed request from a URL, applying optional custom
+     * headers from the 'headers' argument. Package-visible for testing.
+     */
+    static HttpRequest buildSeedRequest(String url, Map<String, Object> args) {
+        HttpRequest request = HttpRequest.httpRequestFromUrl(url);
+        Object headersObj = args.get("headers");
+        if (headersObj instanceof Map) {
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) headersObj).entrySet()) {
+                if (!(entry.getKey() instanceof String)) {
+                    throw new McpError(McpError.INVALID_PARAMS,
+                            "All keys in 'headers' must be strings");
+                }
+                String name = ((String) entry.getKey()).trim();
+                if (name.isEmpty()) {
+                    throw new McpError(McpError.INVALID_PARAMS,
+                            "Header names in 'headers' must not be empty");
+                }
+                request = request.withAddedHeader(name, String.valueOf(entry.getValue()));
+            }
+        } else if (headersObj != null) {
+            throw new McpError(McpError.INVALID_PARAMS, "'headers' must be an object");
+        }
+        return request;
     }
 }

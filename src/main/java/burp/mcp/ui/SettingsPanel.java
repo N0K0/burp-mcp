@@ -24,6 +24,8 @@ public class SettingsPanel extends JPanel {
     private final JTextField bindAddressField;
     private final JTextField threadPoolField;
     private final JTextField maxQueueField;
+    private final JCheckBox socketEnabledCheck;
+    private final JTextField socketPathField;
 
     // Limits group
     private final JTextField maxResponseBodyField;
@@ -72,15 +74,19 @@ public class SettingsPanel extends JPanel {
 
         // ── Server ──
         JPanel serverPanel = new JPanel(new GridBagLayout());
-        serverPanel.setBorder(new TitledBorder("Server (requires restart)"));
+        serverPanel.setBorder(new TitledBorder("Server (press Restart on Status to apply)"));
         GridBagConstraints g = grid();
         portField = addValidatedRow(serverPanel, g, 0, "Port:", String.valueOf(cfg.getPort()), "1-65535");
         bindAddressField = addRow(serverPanel, g, 1, "Bind Address:", cfg.getBindAddress(), "e.g. 127.0.0.1 or 0.0.0.0");
         threadPoolField = addValidatedRow(serverPanel, g, 2, "Thread Pool Size:", String.valueOf(cfg.getThreadPoolSize()), "1-50");
         maxQueueField = addValidatedRow(serverPanel, g, 3, "Max Queue Size:", String.valueOf(cfg.getMaxQueueSize()), "1-1000");
 
+        g.gridx = 0; g.weightx = 0;
+        socketEnabledCheck = checkbox(serverPanel, g, 4, "Enable Unix socket (per-project, no port clashes)", cfg.isSocketEnabled());
+        socketPathField = addRow(serverPanel, g, 5, "Socket Path:", cfg.getSocketPath(), "Empty = <project dir>/<project>.sock; temp path for temporary projects");
+
         // Copy URL button row
-        g.gridy = 4; g.gridx = 0; g.weightx = 0;
+        g.gridy = 6; g.gridx = 0; g.weightx = 0;
         serverPanel.add(new JLabel(""), g);
         g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.NONE;
         JButton copyUrlBtn = new JButton("Copy Server URL");
@@ -171,7 +177,7 @@ public class SettingsPanel extends JPanel {
 
         // ── Security: TLS ──
         JPanel tlsPanel = new JPanel(new GridBagLayout());
-        tlsPanel.setBorder(new TitledBorder("Security — TLS (requires restart)"));
+        tlsPanel.setBorder(new TitledBorder("Security — TLS (press Restart on Status to apply)"));
         GridBagConstraints tg = grid();
         tg.gridwidth = 2;
         tlsEnabledCheck = checkbox(tlsPanel, tg, 0, "Enable TLS/HTTPS", cfg.isTlsEnabled());
@@ -231,6 +237,8 @@ public class SettingsPanel extends JPanel {
             cfg.setBindAddress(bindAddressField.getText().trim());
             cfg.setThreadPoolSize(parseInt(threadPoolField, 10));
             cfg.setMaxQueueSize(parseInt(maxQueueField, 100));
+            cfg.setSocketEnabled(socketEnabledCheck.isSelected());
+            cfg.setSocketPath(socketPathField.getText().trim());
             cfg.setMaxResponseBodyBytes(parseInt(maxResponseBodyField, 100_000));
             cfg.setMaxSitemapEntries(parseInt(maxSitemapField, 500));
             cfg.setRequestTimeoutMs(parseInt(requestTimeoutField, 30_000));
@@ -274,6 +282,8 @@ public class SettingsPanel extends JPanel {
         bindAddressField.setText("127.0.0.1");
         threadPoolField.setText("10");
         maxQueueField.setText("100");
+        socketEnabledCheck.setSelected(true);
+        socketPathField.setText("");
         maxResponseBodyField.setText("100000");
         maxSitemapField.setText("500");
         requestTimeoutField.setText("30000");
@@ -307,6 +317,8 @@ public class SettingsPanel extends JPanel {
                 lines.add(jsonLine("bind_address", cfg.getBindAddress()));
                 lines.add(jsonLine("thread_pool_size", cfg.getThreadPoolSize()));
                 lines.add(jsonLine("max_queue_size", cfg.getMaxQueueSize()));
+                lines.add(jsonLine("socket_enabled", cfg.isSocketEnabled()));
+                lines.add(jsonLine("socket_path", cfg.getSocketPath()));
                 lines.add(jsonLine("max_response_body_bytes", cfg.getMaxResponseBodyBytes()));
                 lines.add(jsonLine("max_sitemap_entries", cfg.getMaxSitemapEntries()));
                 lines.add(jsonLine("request_timeout_ms", cfg.getRequestTimeoutMs()));
@@ -345,6 +357,8 @@ public class SettingsPanel extends JPanel {
                 if (node.has("bind_address")) bindAddressField.setText(node.get("bind_address").asText());
                 if (node.has("thread_pool_size")) threadPoolField.setText(String.valueOf(node.get("thread_pool_size").asInt()));
                 if (node.has("max_queue_size")) maxQueueField.setText(String.valueOf(node.get("max_queue_size").asInt()));
+                if (node.has("socket_enabled")) socketEnabledCheck.setSelected(node.get("socket_enabled").asBoolean());
+                if (node.has("socket_path")) socketPathField.setText(node.get("socket_path").asText());
                 if (node.has("max_response_body_bytes")) maxResponseBodyField.setText(String.valueOf(node.get("max_response_body_bytes").asInt()));
                 if (node.has("max_sitemap_entries")) maxSitemapField.setText(String.valueOf(node.get("max_sitemap_entries").asInt()));
                 if (node.has("request_timeout_ms")) requestTimeoutField.setText(String.valueOf(node.get("request_timeout_ms").asInt()));
