@@ -74,6 +74,29 @@ It adds a "Burp MCP" tab with six screens: Status (Start/Stop/Restart,
 metrics, request log), Settings, Tool Tester, Permissions, Approvals, and
 Messages.
 
+## Screenshots
+
+A gated call waits for an operator decision in the popup — Allow once, Allow
+for session, or Deny with a reason that is returned to the agent. Dismissing it
+leaves the request in the Approvals tab, which badges while anything is
+pending:
+
+![Approval popup: allow once, allow for session, or deny with a reason](docs/images/approval-popup.png)
+
+`burp_info` reports the live gate state — scope enforcement mode, approval
+wait/TTL, pending count, and session grants — so agents can see why a call was
+blocked:
+
+![burp_info output with scope enforcement and approval fields](docs/images/burp-info-approvals.png)
+
+Approval timing lives in Settings with the other server limits:
+
+![Operator approval settings: wait for decision and pending TTL](docs/images/settings-approvals.png)
+
+The Status tab shows the listeners, metrics, and request log:
+
+![Status tab with TCP and Unix socket listeners](docs/images/status.png)
+
 ## Compared with PortSwigger's MCP server
 
 PortSwigger ships an [official MCP server](https://github.com/PortSwigger/mcp-server)

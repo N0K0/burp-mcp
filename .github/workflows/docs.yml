@@ -35,6 +35,9 @@ jobs:
           if [ -d target/site/apidocs ]; then cp -r target/site/apidocs/. public/apidocs/; fi
           if [ -d target/reports/apidocs ]; then cp -r target/reports/apidocs/. public/apidocs/; fi
           test -f public/apidocs/index.html
+          # README image assets must be reachable from public/readme.html
+          mkdir -p public/docs
+          cp -r docs/images public/docs/images
           python3 - <<'EOF'
           import markdown
           tpl = ("<!doctype html><html><head><meta charset='utf-8'>"
