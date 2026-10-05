@@ -173,4 +173,60 @@ class McpConfigTest {
             cfg.setSocketEnabled(prevEnabled);
         }
     }
+
+    // ── Approvals / scope enforcement ───────────────────────────────
+
+    @Test
+    void scopeEnforcement_shouldRoundTripAndValidate() {
+        McpConfig cfg = McpConfig.getInstance();
+        String prev = cfg.getScopeEnforcement();
+        try {
+            cfg.setScopeEnforcement("deny");
+            assertThat(cfg.getScopeEnforcement()).isEqualTo("deny");
+            assertThat(cfg.validate()).noneMatch(e -> e.contains("Scope enforcement"));
+
+            cfg.setScopeEnforcement("bogus");
+            assertThat(cfg.validate()).anyMatch(e -> e.contains("Scope enforcement"));
+        } finally {
+            cfg.setScopeEnforcement(prev);
+        }
+    }
+
+    @Test
+    void approvalWindows_shouldRoundTripAndValidateRanges() {
+        McpConfig cfg = McpConfig.getInstance();
+        int prevWait = cfg.getApprovalWaitSeconds();
+        int prevTtl = cfg.getApprovalTtlSeconds();
+        try {
+            cfg.setApprovalWaitSeconds(60);
+            cfg.setApprovalTtlSeconds(120);
+            assertThat(cfg.getApprovalWaitSeconds()).isEqualTo(60);
+            assertThat(cfg.getApprovalTtlSeconds()).isEqualTo(120);
+            assertThat(cfg.validate()).noneMatch(e -> e.contains("Approval"));
+
+            cfg.setApprovalWaitSeconds(4);
+            assertThat(cfg.validate()).anyMatch(e -> e.contains("Approval wait"));
+
+            cfg.setApprovalWaitSeconds(30);
+            cfg.setApprovalTtlSeconds(10);
+            assertThat(cfg.validate()).anyMatch(e -> e.contains("Approval TTL"));
+        } finally {
+            cfg.setApprovalWaitSeconds(prevWait);
+            cfg.setApprovalTtlSeconds(prevTtl);
+        }
+    }
+
+    @Test
+    void approvalPopup_shouldRoundTrip() {
+        McpConfig cfg = McpConfig.getInstance();
+        boolean prev = cfg.isApprovalPopupEnabled();
+        try {
+            cfg.setApprovalPopupEnabled(false);
+            assertThat(cfg.isApprovalPopupEnabled()).isFalse();
+            cfg.setApprovalPopupEnabled(true);
+            assertThat(cfg.isApprovalPopupEnabled()).isTrue();
+        } finally {
+            cfg.setApprovalPopupEnabled(prev);
+        }
+    }
 }

@@ -9,13 +9,14 @@ import burp.mcp.util.McpJson;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.util.List;
 import java.util.Map;
 
 /**
  * Add an HTTP request/response pair to the site map.
  * Note: Burp has no Logger write API, so we use sitemap.add() instead.
  */
-public class LoggerAddTool implements Tool {
+public class LoggerAddTool implements Tool, TargetedTool {
 
     private final MontoyaApi api;
 
@@ -85,5 +86,15 @@ public class LoggerAddTool implements Tool {
         ObjectNode res = McpJson.createObjectNode();
         res.put("success", true);
         return res;
+    }
+
+    @Override
+    public List<String> targetUrls(Map<String, Object> args) {
+        String rawRequest = (String) args.get("raw_request");
+        if (rawRequest == null || rawRequest.isEmpty()) {
+            return List.of();
+        }
+        String url = HttpSendRequestTool.targetUrlFromRaw(rawRequest, null);
+        return url != null && !url.isEmpty() ? List.of(url) : List.of();
     }
 }

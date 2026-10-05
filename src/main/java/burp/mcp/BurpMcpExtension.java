@@ -18,17 +18,25 @@ public class BurpMcpExtension implements BurpExtension {
     private McpServerManager serverManager;
     private McpToolRegistry registry;
     private MetricsCollector metrics;
+    private McpUiPanel uiPanel;
 
     @Override
     public void initialize(MontoyaApi api) {
         api.extension().setName("Burp MCP Server");
 
         // Clear stale global handler from previous loads, but keep logging
-        // so post-reload crashes are still visible.
+        // so post-reload crashes are still visible. After unload the Montoya
+        // proxies are dead, so logging itself can throw — never let the
+        // handler mask the original exception.
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
             try {
                 api.logging().logToError("[burp-mcp] uncaught in thread " + t.getName(), e);
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
+                try {
+                    System.err.println("[burp-mcp] uncaught in thread " + t.getName() + ": " + e);
+                } catch (Throwable ignoredAgain) {
+                    // Nothing else we can safely do.
+                }
             }
         });
 
@@ -91,7 +99,7 @@ public class BurpMcpExtension implements BurpExtension {
 
         // ── UI ──
         try {
-            McpUiPanel uiPanel = new McpUiPanel(api, registry, perms, serverManager);
+            uiPanel = new McpUiPanel(api, registry, perms, serverManager);
             api.userInterface().registerSuiteTab("Burp MCP", uiPanel);
             api.logging().logToOutput("[burp-mcp] UI tab registered.");
         } catch (Exception e) {
@@ -102,8 +110,19 @@ public class BurpMcpExtension implements BurpExtension {
         serverManager.start();
 
         api.extension().registerUnloadingHandler(() -> {
-            if (serverManager != null) {
-                serverManager.stop();
+            try {
+                if (serverManager != null) {
+                    serverManager.stop();
+                }
+            } finally {
+                // Stop Swing timers and detach listeners so a reload cannot
+                // leave this instance's UI polling a dead Montoya API.
+                if (uiPanel != null) {
+                    try {
+                        uiPanel.dispose();
+                    } catch (Exception ignored) {
+                    }
+                }
             }
         });
     }

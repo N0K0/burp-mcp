@@ -3,6 +3,7 @@ package burp.mcp.ui;
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.BurpSuiteEdition;
 import burp.mcp.tool.McpToolRegistry;
+import burp.mcp.util.McpConfig;
 import burp.mcp.util.PermissionManager;
 
 import javax.swing.*;
@@ -16,7 +17,8 @@ import java.util.*;
 
 /**
  * Permission control with a collapsible tree — categories as parent nodes,
- * tools as checkable leaf nodes with color-coded icons.
+ * tools as leaf nodes with a per-tool Allow / Prompt / Deny policy in CUSTOM
+ * mode (click to cycle). Also controls Burp target-scope enforcement.
  */
 public class PermissionsPanel extends JPanel {
 
@@ -25,6 +27,7 @@ public class PermissionsPanel extends JPanel {
     private final boolean isProfessional;
 
     private final JComboBox<String> presetCombo;
+    private final JComboBox<String> scopeCombo;
     private final JCheckBox sensitivityCheck;
     private final JTree tree;
     private final DefaultMutableTreeNode rootNode;
@@ -38,6 +41,12 @@ public class PermissionsPanel extends JPanel {
     private final java.util.List<String> allToolNames = new ArrayList<>();
 
     private boolean updatingFromPreset = false;
+
+    /** Preset combo order: Read-Write, Read-Only, Prompt, Custom. */
+    private static final int IDX_READ_WRITE = 0;
+    private static final int IDX_READ_ONLY = 1;
+    private static final int IDX_PROMPT = 2;
+    private static final int IDX_CUSTOM = 3;
 
     private static final LinkedHashMap<String, String[]> CATEGORIES = new LinkedHashMap<>();
     static {
@@ -61,7 +70,7 @@ public class PermissionsPanel extends JPanel {
         setLayout(new BorderLayout(10, 10));
         setBorder(new EmptyBorder(10, 10, 10, 10));
 
-        // ── Top: presets + sensitivity ──
+        // ── Top: presets + sensitivity + scope enforcement ──
         JPanel topPanel = new JPanel(new GridBagLayout());
         topPanel.setBorder(new TitledBorder("Access Control"));
         GridBagConstraints g = new GridBagConstraints();
@@ -71,7 +80,12 @@ public class PermissionsPanel extends JPanel {
         g.gridx = 0; g.gridy = 0; g.weightx = 0;
         topPanel.add(new JLabel("Mode:"), g);
         g.gridx = 1; g.weightx = 1.0; g.fill = GridBagConstraints.HORIZONTAL;
-        presetCombo = new JComboBox<>(new String[]{"Read-Write (all tools)", "Read-Only (query/list/decode)", "Custom"});
+        presetCombo = new JComboBox<>(new String[]{
+                "Read-Write (all tools)",
+                "Read-Only (query/list/decode)",
+                "Prompt (writes ask)",
+                "Custom (per-tool policy)"
+        });
         presetCombo.setSelectedIndex(indexForLevel(permissions.getLevel()));
         presetCombo.addActionListener(e -> applyPreset());
         topPanel.add(presetCombo, g);
@@ -82,9 +96,26 @@ public class PermissionsPanel extends JPanel {
         sensitivityCheck.addActionListener(e -> { applyPreset(); });
         topPanel.add(sensitivityCheck, g);
 
+        g.gridy = 2; g.gridwidth = 1; g.gridx = 0; g.weightx = 0;
+        topPanel.add(new JLabel("Target scope:"), g);
+        g.gridx = 1; g.weightx = 1.0;
+        scopeCombo = new JComboBox<>(new String[]{
+                "Prompt when out of scope (Add to scope / allow once / allow for session)",
+                "Deny out-of-scope traffic",
+                "Off (no scope checks)"
+        });
+        scopeCombo.setSelectedIndex(scopeIndexFor(McpConfig.getInstance() != null
+                ? McpConfig.getInstance().getScopeEnforcement() : "prompt"));
+        scopeCombo.setToolTipText(McpColors.tooltip("Burp's target scope gates traffic-sending tools "
+                + "(http_send_request, http_send_requests, logger_add, scanner starts). With Prompt, "
+                + "an out-of-scope call asks here before it runs; Allow for session grants the origin "
+                + "until the extension is reloaded. Note: an empty Burp scope means every send counts "
+                + "as out-of-scope."));
+        topPanel.add(scopeCombo, g);
+
         summaryLabel = new JLabel();
         summaryLabel.setFont(summaryLabel.getFont().deriveFont(Font.ITALIC, 11));
-        g.gridy = 2;
+        g.gridy = 3; g.gridx = 0; g.gridwidth = 2;
         topPanel.add(summaryLabel, g);
 
         // ── Quick buttons + search ──
@@ -95,9 +126,9 @@ public class PermissionsPanel extends JPanel {
         allRead.addActionListener(e -> setAllRead(true));
         JButton allWrite = new JButton("All Write");
         allWrite.addActionListener(e -> setAllRead(false));
-        JButton selectAll = new JButton("Select All");
+        JButton selectAll = new JButton("Allow All");
         selectAll.addActionListener(e -> checkAll(true));
-        JButton deselectAll = new JButton("None");
+        JButton deselectAll = new JButton("Deny All");
         deselectAll.addActionListener(e -> checkAll(false));
         quickBtns.add(allRead); quickBtns.add(allWrite);
         quickBtns.add(selectAll); quickBtns.add(deselectAll);
@@ -126,14 +157,16 @@ public class PermissionsPanel extends JPanel {
         tree.setShowsRootHandles(true);
         tree.setCellRenderer(new ToolTreeRenderer());
         tree.setRowHeight(22);
+        tree.setToolTipText(McpColors.tooltip("Custom mode: click a tool to cycle Allow → Prompt → Deny."));
         tree.addMouseListener(new MouseAdapter() {
             @Override public void mouseClicked(MouseEvent e) {
                 if (updatingFromPreset) return;
+                if (presetCombo.getSelectedIndex() != IDX_CUSTOM) return;
                 TreePath path = tree.getPathForLocation(e.getX(), e.getY());
                 if (path == null) return;
                 DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
                 if (node.getUserObject() instanceof ToolInfo ti) {
-                    ti.selected = !ti.selected;
+                    ti.policy = nextPolicy(ti.policy);
                     treeModel.nodeChanged(node);
                 }
             }
@@ -184,7 +217,7 @@ public class PermissionsPanel extends JPanel {
                 if (matched.contains(name)) continue;
                 for (String prefix : entry.getValue()) {
                     if (name.startsWith(prefix)) {
-                        ToolInfo ti = new ToolInfo(name, permissions.isToolEnabled(name));
+                        ToolInfo ti = new ToolInfo(name, permissions.getToolPolicy(name));
                         DefaultMutableTreeNode toolNode = new DefaultMutableTreeNode(ti);
                         catNode.add(toolNode);
                         toolNodes.put(name, toolNode);
@@ -206,7 +239,7 @@ public class PermissionsPanel extends JPanel {
         if (!unmatched.isEmpty()) {
             DefaultMutableTreeNode otherNode = new DefaultMutableTreeNode("Other");
             for (String name : unmatched) {
-                ToolInfo ti = new ToolInfo(name, permissions.isToolEnabled(name));
+                ToolInfo ti = new ToolInfo(name, permissions.getToolPolicy(name));
                 DefaultMutableTreeNode tn = new DefaultMutableTreeNode(ti);
                 otherNode.add(tn);
                 toolNodes.put(name, tn);
@@ -218,36 +251,47 @@ public class PermissionsPanel extends JPanel {
 
     private void applyPreset() {
         updatingFromPreset = true;
-        boolean custom = presetCombo.getSelectedIndex() == 2;
+        int idx = presetCombo.getSelectedIndex();
+        boolean custom = idx == IDX_CUSTOM;
         for (var entry : toolNodes.entrySet()) {
             ToolInfo ti = (ToolInfo) entry.getValue().getUserObject();
-            if (!custom) {
-                ti.selected = presetCombo.getSelectedIndex() == 0
-                        || PermissionManager.isReadTool(entry.getKey());
-            }
             ti.enabled = custom;
+            if (!custom) {
+                if (idx == IDX_READ_WRITE) {
+                    ti.policy = PermissionManager.Policy.ALLOW;
+                } else if (idx == IDX_READ_ONLY) {
+                    ti.policy = PermissionManager.isReadTool(entry.getKey())
+                            ? PermissionManager.Policy.ALLOW : PermissionManager.Policy.DENY;
+                } else { // IDX_PROMPT
+                    ti.policy = PermissionManager.isReadTool(entry.getKey())
+                            ? PermissionManager.Policy.ALLOW : PermissionManager.Policy.PROMPT;
+                }
+            }
         }
         tree.repaint();
         updatingFromPreset = false;
         updateSummary();
     }
 
-    private void checkAll(boolean sel) {
+    private void checkAll(boolean allow) {
         for (var entry : toolNodes.entrySet()) {
             if (!isProfessional && isProOnly(entry.getKey())) continue;
-            ((ToolInfo) entry.getValue().getUserObject()).selected = sel;
+            ((ToolInfo) entry.getValue().getUserObject()).policy =
+                    allow ? PermissionManager.Policy.ALLOW : PermissionManager.Policy.DENY;
         }
         tree.repaint();
+        updateSummary();
     }
 
     private void setAllRead(boolean readOnly) {
         for (var entry : toolNodes.entrySet()) {
             if (!isProfessional && isProOnly(entry.getKey())) continue;
-            ((ToolInfo) entry.getValue().getUserObject()).selected = readOnly
-                    ? PermissionManager.isReadTool(entry.getKey())
-                    : !PermissionManager.isReadTool(entry.getKey());
+            boolean isRead = PermissionManager.isReadTool(entry.getKey());
+            ((ToolInfo) entry.getValue().getUserObject()).policy = isRead == readOnly
+                    ? PermissionManager.Policy.ALLOW : PermissionManager.Policy.DENY;
         }
         tree.repaint();
+        updateSummary();
     }
 
     private void applyFilter() {
@@ -261,12 +305,23 @@ public class PermissionsPanel extends JPanel {
     }
 
     private void updateSummary() {
-        int read = 0, write = 0, sens = 0;
+        int read = 0, write = 0, sens = 0, prompt = 0, deny = 0;
         for (String name : allToolNames) {
             if (PermissionManager.isReadTool(name)) read++; else write++;
             if (PermissionManager.isSensitive(name)) sens++;
+            ToolInfo ti = treeInfo(name);
+            if (ti != null) {
+                if (ti.policy == PermissionManager.Policy.PROMPT) prompt++;
+                else if (ti.policy == PermissionManager.Policy.DENY) deny++;
+            }
         }
-        summaryLabel.setText(read + " read-only | " + write + " write | " + sens + " sensitive");
+        summaryLabel.setText(read + " read-only | " + write + " write | " + sens + " sensitive | "
+                + prompt + " prompt | " + deny + " denied");
+    }
+
+    private ToolInfo treeInfo(String name) {
+        DefaultMutableTreeNode node = toolNodes.get(name);
+        return node != null && node.getUserObject() instanceof ToolInfo ti ? ti : null;
     }
 
     private void applyPermissions() {
@@ -275,20 +330,43 @@ public class PermissionsPanel extends JPanel {
         permissions.setBlockSensitive(sensitivityCheck.isSelected());
 
         if (level == PermissionManager.Level.CUSTOM) {
+            Map<String, PermissionManager.Policy> policies = new HashMap<>();
             for (var entry : toolNodes.entrySet()) {
                 if (!isProfessional && isProOnly(entry.getKey())) continue;
                 ToolInfo ti = (ToolInfo) entry.getValue().getUserObject();
-                if (ti.selected) permissions.enableTool(entry.getKey());
-                else permissions.disableTool(entry.getKey());
+                policies.put(entry.getKey(), ti.policy);
             }
+            permissions.setToolPolicies(policies);
         }
 
-        int enabled = 0, disabled = 0;
+        // Target-scope enforcement (read live by the access gate).
+        try {
+            McpConfig cfg = McpConfig.getInstance();
+            if (cfg != null) {
+                cfg.setScopeEnforcement(scopeForIndex(scopeCombo.getSelectedIndex()));
+            }
+        } catch (Exception ignored) {
+            // Config unavailable — the gate keeps its current setting.
+        }
+
+        int allow = 0, prompt = 0, deny = 0;
         for (String name : allToolNames) {
-            if (permissions.isToolEnabled(name)) enabled++; else disabled++;
+            ToolInfo ti = treeInfo(name);
+            if (ti == null) continue;
+            switch (ti.policy) {
+                case ALLOW -> allow++;
+                case PROMPT -> prompt++;
+                case DENY -> deny++;
+            }
         }
         String sens = sensitivityCheck.isSelected() ? " | Sensitive: BLOCKED" : " | Sensitive: ALLOWED";
-        statusLabel.setText("Applied: " + level.name() + " | " + enabled + " enabled, " + disabled + " disabled" + sens);
+        String scope = switch (scopeCombo.getSelectedIndex()) {
+            case 1 -> " | Scope: DENY";
+            case 2 -> " | Scope: OFF";
+            default -> " | Scope: PROMPT";
+        };
+        statusLabel.setText("Applied: " + level.name() + " | " + allow + " allow, " + prompt
+                + " prompt, " + deny + " deny" + sens + scope);
         statusLabel.setForeground(McpColors.GREEN);
     }
 
@@ -296,33 +374,59 @@ public class PermissionsPanel extends JPanel {
         return toolName.startsWith("scanner_") || toolName.startsWith("collaborator_");
     }
 
-    // Combo order is Read-Write, Read-Only, Custom — deliberately not
-    // Level.ordinal() (which is READ_ONLY, READ_WRITE, CUSTOM).
+    static PermissionManager.Policy nextPolicy(PermissionManager.Policy policy) {
+        return switch (policy) {
+            case ALLOW -> PermissionManager.Policy.PROMPT;
+            case PROMPT -> PermissionManager.Policy.DENY;
+            case DENY -> PermissionManager.Policy.ALLOW;
+        };
+    }
+
+    // Preset combo order is Read-Write, Read-Only, Prompt, Custom — deliberately
+    // not Level.ordinal() (READ_ONLY, READ_WRITE, PROMPT, CUSTOM).
     private static int indexForLevel(PermissionManager.Level level) {
         return switch (level) {
-            case READ_WRITE -> 0;
-            case READ_ONLY -> 1;
-            case CUSTOM -> 2;
+            case READ_WRITE -> IDX_READ_WRITE;
+            case READ_ONLY -> IDX_READ_ONLY;
+            case PROMPT -> IDX_PROMPT;
+            case CUSTOM -> IDX_CUSTOM;
         };
     }
 
     private static PermissionManager.Level levelForIndex(int idx) {
         return switch (idx) {
-            case 0 -> PermissionManager.Level.READ_WRITE;
-            case 1 -> PermissionManager.Level.READ_ONLY;
+            case IDX_READ_WRITE -> PermissionManager.Level.READ_WRITE;
+            case IDX_READ_ONLY -> PermissionManager.Level.READ_ONLY;
+            case IDX_PROMPT -> PermissionManager.Level.PROMPT;
             default -> PermissionManager.Level.CUSTOM;
+        };
+    }
+
+    private static int scopeIndexFor(String enforcement) {
+        return switch (enforcement == null ? "prompt" : enforcement) {
+            case "deny" -> 1;
+            case "off" -> 2;
+            default -> 0;
+        };
+    }
+
+    private static String scopeForIndex(int idx) {
+        return switch (idx) {
+            case 1 -> "deny";
+            case 2 -> "off";
+            default -> "prompt";
         };
     }
 
     static class ToolInfo {
         final String name;
-        boolean selected;
+        PermissionManager.Policy policy;
         boolean enabled = true;
         boolean filteredOut = false;
 
-        ToolInfo(String name, boolean selected) {
+        ToolInfo(String name, PermissionManager.Policy policy) {
             this.name = name;
-            this.selected = selected;
+            this.policy = policy;
         }
 
         @Override public String toString() { return name; }
@@ -352,7 +456,6 @@ public class PermissionsPanel extends JPanel {
                     return checkBox;
                 }
                 checkBox.setVisible(true);
-                checkBox.setText(ti.name);
                 checkBox.setEnabled(ti.enabled);
                 checkBox.setFont(McpColors.LABEL_FONT);
 
@@ -365,28 +468,38 @@ public class PermissionsPanel extends JPanel {
                     checkBox.setSelected(false);
                     checkBox.setEnabled(false);
                     checkBox.setToolTipText("Requires Burp Suite Professional");
-                } else if (blocked) {
+                    return checkBox;
+                }
+                if (blocked) {
                     checkBox.setForeground(McpColors.GRAY);
                     checkBox.setText("\uD83D\uDD12 " + ti.name);
                     checkBox.setSelected(false);
-                    checkBox.setEnabled(ti.enabled);
-                    checkBox.setToolTipText(null);
-                } else if (PermissionManager.isSensitive(ti.name)) {
-                    checkBox.setForeground(McpColors.AMBER);
-                    checkBox.setText("\uD83D\uDD12 " + ti.name);
-                    checkBox.setSelected(ti.selected);
-                    checkBox.setEnabled(ti.enabled);
-                    checkBox.setToolTipText(null);
-                } else if (PermissionManager.isReadTool(ti.name)) {
-                    checkBox.setForeground(McpColors.GREEN);
-                    checkBox.setSelected(ti.selected);
-                    checkBox.setEnabled(ti.enabled);
-                    checkBox.setToolTipText(null);
-                } else {
-                    checkBox.setForeground(UIManager.getColor("Label.foreground"));
-                    checkBox.setSelected(ti.selected);
-                    checkBox.setEnabled(ti.enabled);
-                    checkBox.setToolTipText(null);
+                    checkBox.setToolTipText("Blocked by the sensitivity gate");
+                    return checkBox;
+                }
+
+                String prefix = PermissionManager.isSensitive(ti.name) ? "\uD83D\uDD12 " : "";
+                switch (ti.policy) {
+                    case PROMPT -> {
+                        checkBox.setForeground(McpColors.AMBER);
+                        checkBox.setText(prefix + "\u2753 " + ti.name);
+                        checkBox.setSelected(false);
+                        checkBox.setToolTipText("Operator approval required");
+                    }
+                    case DENY -> {
+                        checkBox.setForeground(McpColors.RED);
+                        checkBox.setText(prefix + "\u2715 " + ti.name);
+                        checkBox.setSelected(false);
+                        checkBox.setToolTipText("Denied");
+                    }
+                    default -> {
+                        checkBox.setForeground(PermissionManager.isSensitive(ti.name)
+                                ? McpColors.AMBER
+                                : (PermissionManager.isReadTool(ti.name) ? McpColors.GREEN : UIManager.getColor("Label.foreground")));
+                        checkBox.setText(prefix + ti.name);
+                        checkBox.setSelected(true);
+                        checkBox.setToolTipText(null);
+                    }
                 }
                 return checkBox;
             }

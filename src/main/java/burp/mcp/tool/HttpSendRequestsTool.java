@@ -17,7 +17,7 @@ import java.util.Map;
 /**
  * Send multiple HTTP requests in parallel and return their responses.
  */
-public class HttpSendRequestsTool implements Tool {
+public class HttpSendRequestsTool implements Tool, TargetedTool {
 
     /** Max requests per batch: bounds parallel fan-out (DoS/SSRF amplifier). */
     private static final int MAX_BATCH_REQUESTS = 20;
@@ -105,5 +105,24 @@ public class HttpSendRequestsTool implements Tool {
             throw new McpError(McpError.REQUEST_FAILED,
                     "Failed to send HTTP requests: " + e.getMessage());
         }
+    }
+
+    @Override
+    public List<String> targetUrls(Map<String, Object> args) {
+        List<String> targets = new ArrayList<>();
+        Object requestsObj = args.get("requests");
+        if (!(requestsObj instanceof List<?> requestList)) {
+            return targets;
+        }
+        for (Object item : requestList) {
+            if (!(item instanceof String raw) || raw.isEmpty()) {
+                continue;
+            }
+            String url = HttpSendRequestTool.targetUrlFromRaw(raw, null);
+            if (url != null && !url.isEmpty()) {
+                targets.add(url);
+            }
+        }
+        return targets;
     }
 }

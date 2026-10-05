@@ -1,35 +1,76 @@
 package burp.mcp.util;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Middleware permission manager for MCP tool access control.
  *
- * Three operating modes:
+ * Four operating modes:
  *   READ_ONLY  — only tools that don't modify state (query, list, parse, decode)
  *   READ_WRITE — all tools allowed (default)
- *   CUSTOM     — per-tool enable/disable via the enabledTools set
+ *   PROMPT     — read tools allowed, write tools require operator approval
+ *   CUSTOM     — per-tool policy: ALLOW, PROMPT or DENY
  *
  * Sensitivity gate: when blockSensitive is true, tools tagged as sensitive
- * are denied regardless of mode. In CUSTOM mode an explicit allow still
- * does not bypass the sensitivity gate — disable sensitivity blocking
- * in the Permissions tab to use these tools.
+ * are denied regardless of mode (a hard deny that never prompts).
  */
 public class PermissionManager {
 
     public enum Level {
         READ_ONLY,
         READ_WRITE,
+        PROMPT,
         CUSTOM
+    }
+
+    /** Per-tool policy for CUSTOM mode. */
+    public enum Policy {
+        ALLOW,
+        PROMPT,
+        DENY
+    }
+
+    /** Evaluation result for one tool call. */
+    public static final class Access {
+        private final Policy policy;
+        private final String reason;
+
+        private Access(Policy policy, String reason) {
+            this.policy = policy;
+            this.reason = reason;
+        }
+
+        public Policy getPolicy() {
+            return policy;
+        }
+
+        /** Human-readable explanation when the policy is PROMPT or DENY. */
+        public String getReason() {
+            return reason;
+        }
+
+        public boolean isAllowed() {
+            return policy == Policy.ALLOW;
+        }
+
+        public boolean isPrompt() {
+            return policy == Policy.PROMPT;
+        }
+
+        public boolean isDenied() {
+            return policy == Policy.DENY;
+        }
     }
 
     // ── State ────────────────────────────────────────────────────────
     private volatile Level level = Level.READ_WRITE;
     private volatile boolean blockSensitive = false;
-    private final Set<String> enabledTools = Collections.synchronizedSet(new HashSet<>());
-    private final Set<String> disabledTools = Collections.synchronizedSet(new HashSet<>());
+    private final Map<String, Policy> toolPolicies = new ConcurrentHashMap<>();
 
     // ── Tool categories ──────────────────────────────────────────────
 
@@ -86,77 +127,152 @@ public class PermissionManager {
         this.blockSensitive = block;
     }
 
-    /** Enable a tool in CUSTOM mode. */
+    // ── Per-tool policies (CUSTOM mode) ──────────────────────────────
+
+    /** Set the explicit policy for a tool in CUSTOM mode. */
+    public void setToolPolicy(String toolName, Policy policy) {
+        if (toolName == null || policy == null) {
+            return;
+        }
+        toolPolicies.put(toolName, policy);
+    }
+
+    /** Explicit policy for a tool in CUSTOM mode; unset defaults to ALLOW. */
+    public Policy getToolPolicy(String toolName) {
+        return toolPolicies.getOrDefault(toolName, Policy.ALLOW);
+    }
+
+    /** Replace the full per-tool policy map (for bulk import / Apply). */
+    public void setToolPolicies(Map<String, Policy> policies) {
+        toolPolicies.clear();
+        if (policies != null) {
+            toolPolicies.putAll(policies);
+        }
+    }
+
+    /** Snapshot of the explicitly configured per-tool policies. */
+    public Map<String, Policy> getToolPolicies() {
+        return Collections.unmodifiableMap(new HashMap<>(toolPolicies));
+    }
+
+    /** Enable a tool in CUSTOM mode (policy ALLOW). */
     public void enableTool(String toolName) {
-        enabledTools.add(toolName);
-        disabledTools.remove(toolName);
+        setToolPolicy(toolName, Policy.ALLOW);
     }
 
-    /** Disable a tool in CUSTOM mode. */
+    /** Disable a tool in CUSTOM mode (policy DENY). */
     public void disableTool(String toolName) {
-        disabledTools.add(toolName);
-        enabledTools.remove(toolName);
+        setToolPolicy(toolName, Policy.DENY);
     }
 
-    /** Check if a tool is explicitly enabled in CUSTOM mode. */
+    /** Check if a tool is not explicitly denied in CUSTOM mode. */
     public boolean isToolEnabled(String toolName) {
-        if (disabledTools.contains(toolName)) return false;
-        if (enabledTools.contains(toolName)) return true;
-        // If not explicitly set, default to enabled
-        return true;
+        return getToolPolicy(toolName) != Policy.DENY;
     }
 
-    /** Set the full set of enabled tools (for bulk import from preferences). */
+    /** Set the full set of allowed tools (others keep their default ALLOW). */
     public void setEnabledTools(Set<String> tools) {
-        enabledTools.clear();
-        enabledTools.addAll(tools);
+        setToolPolicies(new HashMap<>());
+        if (tools != null) {
+            for (String t : tools) {
+                toolPolicies.put(t, Policy.ALLOW);
+            }
+        }
     }
 
-    /** Set the full set of disabled tools. */
+    /** Set the full set of denied tools. */
     public void setDisabledTools(Set<String> tools) {
-        disabledTools.clear();
-        disabledTools.addAll(tools);
+        toolPolicies.clear();
+        if (tools != null) {
+            for (String t : tools) {
+                toolPolicies.put(t, Policy.DENY);
+            }
+        }
     }
 
     public Set<String> getEnabledTools() {
-        return Collections.unmodifiableSet(new HashSet<>(enabledTools));
+        Set<String> out = new HashSet<>();
+        for (var e : toolPolicies.entrySet()) {
+            if (e.getValue() == Policy.ALLOW) {
+                out.add(e.getKey());
+            }
+        }
+        return Collections.unmodifiableSet(out);
     }
 
     public Set<String> getDisabledTools() {
-        return Collections.unmodifiableSet(new HashSet<>(disabledTools));
+        Set<String> out = new HashSet<>();
+        for (var e : toolPolicies.entrySet()) {
+            if (e.getValue() == Policy.DENY) {
+                out.add(e.getKey());
+            }
+        }
+        return Collections.unmodifiableSet(out);
+    }
+
+    public Set<String> getPromptTools() {
+        Set<String> out = new HashSet<>();
+        for (var e : toolPolicies.entrySet()) {
+            if (e.getValue() == Policy.PROMPT) {
+                out.add(e.getKey());
+            }
+        }
+        return Collections.unmodifiableSet(out);
     }
 
     // ── Access check ─────────────────────────────────────────────────
 
     /**
-     * Check whether a tool call is permitted.
-     * @return null if allowed, or an error message string if denied.
+     * Evaluate the policy for a tool call.
+     * The returned {@link Access} is never null: it is ALLOW, PROMPT or DENY.
      */
-    public String checkAccess(String toolName) {
+    public Access evaluate(String toolName) {
+        Policy policy;
+        String reason = null;
+
         switch (level) {
             case READ_ONLY:
-                if (!READ_TOOLS.contains(toolName)) {
-                    return "Tool '" + toolName + "' is a write/modify operation. "
-                         + "Permission level is READ_ONLY. Use the Burp MCP UI to change to READ_WRITE.";
-                }
-                break;
-            case CUSTOM:
-                if (!isToolEnabled(toolName)) {
-                    return "Tool '" + toolName + "' is disabled in CUSTOM permission mode.";
+                if (isReadTool(toolName)) {
+                    policy = Policy.ALLOW;
+                } else {
+                    policy = Policy.DENY;
+                    reason = "Tool '" + toolName + "' is a write/modify operation and the permission "
+                           + "level is READ_ONLY. Change the level to READ_WRITE or PROMPT in the "
+                           + "Burp MCP Permissions tab.";
                 }
                 break;
             case READ_WRITE:
-                // All tools allowed at base level
+                policy = Policy.ALLOW;
+                break;
+            case PROMPT:
+                if (isReadTool(toolName)) {
+                    policy = Policy.ALLOW;
+                } else {
+                    policy = Policy.PROMPT;
+                    reason = "Tool '" + toolName + "' is a write/modify operation and the permission "
+                           + "mode is PROMPT: operator approval is required.";
+                }
+                break;
+            case CUSTOM:
+            default:
+                policy = getToolPolicy(toolName);
+                if (policy == Policy.DENY) {
+                    reason = "Tool '" + toolName + "' is disabled in CUSTOM permission mode.";
+                } else if (policy == Policy.PROMPT) {
+                    reason = "Tool '" + toolName + "' requires operator approval under the current "
+                           + "CUSTOM permission policy.";
+                }
                 break;
         }
 
-        // Sensitivity gate: if on, block sensitive tools (applies in all modes)
+        // Sensitivity gate: hard deny that takes precedence in every mode.
         if (blockSensitive && SENSITIVE_TOOLS.contains(toolName)) {
-            return "Tool '" + toolName + "' is marked as sensitive and sensitivity blocking is enabled. "
-                 + "Disable sensitivity blocking in the Permissions tab to use this tool.";
+            return new Access(Policy.DENY,
+                    "Tool '" + toolName + "' is marked as sensitive and sensitivity blocking is "
+                  + "enabled. Disable sensitivity blocking in the Permissions tab to use this tool.");
         }
 
-        return null; // allowed
+        return new Access(policy, reason);
     }
 
     // ── Static helpers for UI ────────────────────────────────────────

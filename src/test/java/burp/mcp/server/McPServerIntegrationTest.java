@@ -9,12 +9,18 @@ import burp.api.montoya.logging.Logging;
 import burp.api.montoya.persistence.Persistence;
 import burp.api.montoya.persistence.Preferences;
 import burp.api.montoya.project.Project;
+import burp.api.montoya.scope.Scope;
 import burp.mcp.tool.McpToolRegistry;
+import burp.mcp.tool.TargetedTool;
+import burp.mcp.tool.Tool;
+import burp.mcp.tool.ToolDefinition;
+import burp.mcp.util.ApprovalManager;
 import burp.mcp.util.McpConfig;
 import burp.mcp.util.McpJson;
 import burp.mcp.util.PermissionManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,7 +32,14 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -41,6 +54,16 @@ class McPServerIntegrationTest {
     private static final ObjectMapper mapper = new ObjectMapper();
     private static MontoyaApi mockApi;
     private static McpToolRegistry registry;
+    private static PermissionManager permissions;
+    private static ApprovalManager approvals;
+
+    // Gate seams: tests flip these between cases.
+    private static final AtomicReference<String> scopeEnforcement = new AtomicReference<>("off");
+    private static final AtomicReference<Integer> approvalWaitSeconds = new AtomicReference<>(1);
+    private static final AtomicReference<Predicate<String>> scopeInScope =
+            new AtomicReference<>(url -> true);
+    private static final List<String> scopeIncluded =
+            Collections.synchronizedList(new ArrayList<>());
 
     @BeforeAll
     static void startServer() throws Exception {
@@ -59,11 +82,24 @@ class McPServerIntegrationTest {
             @Override public void setInteger(String key, Integer value) { store.put(key, String.valueOf(value)); }
         });
         McpConfig.getInstance().setPort(port);
+        // Gate tests make many rapid calls; the per-IP rate limiter is not under test here.
+        McpConfig.getInstance().setRateLimitPerMinute(0);
 
         registry = new McpToolRegistry(mockApi);
         registry.registerAllTools();
+        // Deterministic tools for gate tests (no Montoya dependencies)
+        registry.register(new TestTool("test_echo", null));
+        registry.register(new TestTool("test_targeted", "http://targeted.test/"));
 
-        server = new McPServer(mockApi, registry, "127.0.0.1", port, new PermissionManager());
+        permissions = new PermissionManager();
+        approvals = new ApprovalManager();
+        AccessGate gate = new AccessGate(mockApi, permissions, approvals, new AccessGate.Settings() {
+            @Override public String scopeEnforcement() { return scopeEnforcement.get(); }
+            @Override public int approvalWaitSeconds() { return approvalWaitSeconds.get(); }
+            @Override public int approvalTtlSeconds() { return 60; }
+        });
+
+        server = new McPServer(mockApi, registry, "127.0.0.1", port, permissions, null, gate);
         server.start();
         // Give it a moment
         Thread.sleep(200);
@@ -77,8 +113,14 @@ class McPServerIntegrationTest {
     @BeforeEach
     void resetPermissions() {
         // Reset to defaults between tests
-        server.getPermissions().setLevel(PermissionManager.Level.READ_WRITE);
-        server.getPermissions().setBlockSensitive(false);
+        permissions.setLevel(PermissionManager.Level.READ_WRITE);
+        permissions.setBlockSensitive(false);
+        permissions.setToolPolicies(Map.of());
+        approvals.clearAll();
+        scopeEnforcement.set("off");
+        approvalWaitSeconds.set(1);
+        scopeInScope.set(url -> true);
+        scopeIncluded.clear();
     }
 
     // ── Protocol Tests ───────────────────────────────────────────
@@ -358,6 +400,210 @@ class McPServerIntegrationTest {
         }
     }
 
+    // ── Approval / scope gate tests ───────────────────────────────
+
+    @Test
+    void promptMode_allowOnceViaListener_shouldExecuteTool() throws Exception {
+        permissions.setLevel(PermissionManager.Level.CUSTOM);
+        permissions.setToolPolicy("test_echo", PermissionManager.Policy.PROMPT);
+        ApprovalManager.Listener autoAllow = new ApprovalManager.Listener() {
+            @Override
+            public void onPendingAdded(ApprovalManager.PendingApproval pending) {
+                approvals.resolve(pending.getId(), new ApprovalManager.Decision(
+                        ApprovalManager.PermissionDecision.ALLOW_ONCE, null, null));
+            }
+        };
+        approvals.addListener(autoAllow);
+        try {
+            String response = jsonRpc("tools/call",
+                    "{\"name\":\"test_echo\",\"arguments\":{\"value\":\"hello\"}}");
+            JsonNode result = mapper.readTree(response).get("result");
+            assertThat(result).as("response: %s", response).isNotNull();
+            assertThat(result.get("content").get(0).get("text").asText()).contains("hello");
+            assertThat(approvals.pendingCount()).isZero();
+        } finally {
+            approvals.removeListener(autoAllow);
+        }
+    }
+
+    @Test
+    void promptMode_denyWithReason_shouldReturnStructuredError() throws Exception {
+        permissions.setLevel(PermissionManager.Level.CUSTOM);
+        permissions.setToolPolicy("test_echo", PermissionManager.Policy.PROMPT);
+        ApprovalManager.Listener autoDeny = new ApprovalManager.Listener() {
+            @Override
+            public void onPendingAdded(ApprovalManager.PendingApproval pending) {
+                approvals.resolve(pending.getId(), new ApprovalManager.Decision(
+                        ApprovalManager.PermissionDecision.DENY, null, "no thanks"));
+            }
+        };
+        approvals.addListener(autoDeny);
+        try {
+            String response = jsonRpc("tools/call",
+                    "{\"name\":\"test_echo\",\"arguments\":{\"value\":\"hello\"}}");
+            JsonNode error = mapper.readTree(response).get("error");
+            assertThat(error).isNotNull();
+            assertThat(error.get("code").asInt()).isEqualTo(-32005);
+            assertThat(error.get("message").asText()).contains("no thanks");
+            assertThat(error.get("data").get("reason").asText()).isEqualTo("no thanks");
+            assertThat(error.get("data").get("source").asText()).isEqualTo("operator");
+            assertThat(error.get("data").get("permission_denied").asBoolean()).isTrue();
+        } finally {
+            approvals.removeListener(autoDeny);
+        }
+    }
+
+    @Test
+    void promptMode_pendingThenRetry_shouldExecute() throws Exception {
+        permissions.setLevel(PermissionManager.Level.CUSTOM);
+        permissions.setToolPolicy("test_echo", PermissionManager.Policy.PROMPT);
+        approvalWaitSeconds.set(0); // no blocking: respond pending immediately
+
+        String params = "{\"name\":\"test_echo\",\"arguments\":{\"value\":\"retry\"}}";
+        String first = jsonRpc("tools/call", params);
+        JsonNode error = mapper.readTree(first).get("error");
+        assertThat(error).isNotNull();
+        assertThat(error.get("code").asInt()).isEqualTo(-32008);
+        String approvalId = error.get("data").get("approval_id").asText();
+        assertThat(approvalId).isNotBlank();
+        assertThat(approvals.pendingCount()).isEqualTo(1);
+
+        assertThat(approvals.resolve(approvalId, new ApprovalManager.Decision(
+                ApprovalManager.PermissionDecision.ALLOW_ONCE, null, null))).isTrue();
+
+        String retry = jsonRpc("tools/call", params);
+        JsonNode result = mapper.readTree(retry).get("result");
+        assertThat(result).isNotNull();
+        assertThat(result.get("content").get(0).get("text").asText()).contains("retry");
+        assertThat(approvals.pendingCount()).isZero();
+    }
+
+    @Test
+    void promptMode_cancelWhileWaiting_shouldReturnApprovalTimeout() throws Exception {
+        permissions.setLevel(PermissionManager.Level.CUSTOM);
+        permissions.setToolPolicy("test_echo", PermissionManager.Policy.PROMPT);
+        approvalWaitSeconds.set(2); // long enough that the cancel lands during the wait
+
+        String params = "{\"name\":\"test_echo\",\"arguments\":{\"value\":\"expire\"}}";
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<String> pendingResponse = pool.submit(() -> {
+                try {
+                    return jsonRpc("tools/call", params);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            // Wait for the gate to queue the request, then cancel it.
+            String approvalId = null;
+            long deadline = System.currentTimeMillis() + 5000;
+            while (approvalId == null && System.currentTimeMillis() < deadline) {
+                var pending = approvals.getPending();
+                if (!pending.isEmpty()) {
+                    approvalId = pending.get(0).getId();
+                } else {
+                    Thread.sleep(10);
+                }
+            }
+            assertThat(approvalId).isNotNull();
+            assertThat(approvals.cancel(approvalId)).isTrue();
+
+            JsonNode error = mapper.readTree(pendingResponse.get(5, java.util.concurrent.TimeUnit.SECONDS))
+                    .get("error");
+            assertThat(error).isNotNull();
+            assertThat(error.get("code").asInt()).isEqualTo(-32009);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void outOfScope_denyEnforcement_shouldReturnOutOfScopeError() throws Exception {
+        scopeEnforcement.set("deny");
+        scopeInScope.set(url -> false);
+
+        String response = jsonRpc("tools/call",
+                "{\"name\":\"test_targeted\",\"arguments\":{\"value\":\"x\"}}");
+        JsonNode error = mapper.readTree(response).get("error");
+        assertThat(error).isNotNull();
+        assertThat(error.get("code").asInt()).isEqualTo(-32010);
+        assertThat(error.get("data").get("out_of_scope").asBoolean()).isTrue();
+        assertThat(error.get("data").get("targets").get(0).asText()).isEqualTo("http://targeted.test/");
+    }
+
+    @Test
+    void outOfScope_promptAddToScope_shouldIncludeOriginAndExecute() throws Exception {
+        scopeEnforcement.set("prompt");
+        scopeInScope.set(url -> scopeIncluded.contains(AccessGate.originOf(url)));
+        ApprovalManager.Listener addScope = new ApprovalManager.Listener() {
+            @Override
+            public void onPendingAdded(ApprovalManager.PendingApproval pending) {
+                approvals.resolve(pending.getId(), new ApprovalManager.Decision(
+                        null, ApprovalManager.ScopeDecision.ADD_TO_SCOPE, null));
+            }
+        };
+        approvals.addListener(addScope);
+        try {
+            String response = jsonRpc("tools/call",
+                    "{\"name\":\"test_targeted\",\"arguments\":{\"value\":\"x\"}}");
+            assertThat(mapper.readTree(response).get("result")).isNotNull();
+            assertThat(scopeIncluded).containsExactly("http://targeted.test");
+        } finally {
+            approvals.removeListener(addScope);
+        }
+    }
+
+    @Test
+    void outOfScope_promptDeny_shouldReturnOperatorReason() throws Exception {
+        scopeEnforcement.set("prompt");
+        scopeInScope.set(url -> false);
+        ApprovalManager.Listener denyScope = new ApprovalManager.Listener() {
+            @Override
+            public void onPendingAdded(ApprovalManager.PendingApproval pending) {
+                approvals.resolve(pending.getId(), new ApprovalManager.Decision(
+                        null, ApprovalManager.ScopeDecision.DENY, "prod is off limits"));
+            }
+        };
+        approvals.addListener(denyScope);
+        try {
+            String response = jsonRpc("tools/call",
+                    "{\"name\":\"test_targeted\",\"arguments\":{\"value\":\"x\"}}");
+            JsonNode error = mapper.readTree(response).get("error");
+            assertThat(error).isNotNull();
+            assertThat(error.get("code").asInt()).isEqualTo(-32005);
+            assertThat(error.get("data").get("scope_denied").asBoolean()).isTrue();
+            assertThat(error.get("data").get("reason").asText()).isEqualTo("prod is off limits");
+        } finally {
+            approvals.removeListener(denyScope);
+        }
+    }
+
+    @Test
+    void promptMode_sessionGrant_shouldExecuteSubsequentCallsWithoutPrompt() throws Exception {
+        permissions.setLevel(PermissionManager.Level.CUSTOM);
+        permissions.setToolPolicy("test_echo", PermissionManager.Policy.PROMPT);
+        ApprovalManager.Listener sessionAllow = new ApprovalManager.Listener() {
+            @Override
+            public void onPendingAdded(ApprovalManager.PendingApproval pending) {
+                approvals.resolve(pending.getId(), new ApprovalManager.Decision(
+                        ApprovalManager.PermissionDecision.ALLOW_SESSION, null, null));
+            }
+        };
+        approvals.addListener(sessionAllow);
+        try {
+            assertThat(mapper.readTree(jsonRpc("tools/call",
+                    "{\"name\":\"test_echo\",\"arguments\":{\"value\":\"one\"}}")).get("result")).isNotNull();
+
+            String second = jsonRpc("tools/call",
+                    "{\"name\":\"test_echo\",\"arguments\":{\"value\":\"two\"}}");
+            assertThat(mapper.readTree(second).get("result")).isNotNull();
+            assertThat(approvals.pendingCount()).isZero();
+        } finally {
+            approvals.removeListener(sessionAllow);
+        }
+    }
+
     // ── Auth Tests ─────────────────────────────────────────────────
 
     @Test
@@ -475,6 +721,23 @@ class McPServerIntegrationTest {
                         new Class<?>[] { Logging.class },
                         (p2, m2, a2) -> null);
                 }
+                // Stub scope for the access-gate tests
+                if ("scope".equals(methodName)) {
+                    return java.lang.reflect.Proxy.newProxyInstance(
+                        Scope.class.getClassLoader(),
+                        new Class<?>[] { Scope.class },
+                        (p2, m2, a2) -> {
+                            switch (m2.getName()) {
+                                case "isInScope":
+                                    return scopeInScope.get().test((String) a2[0]);
+                                case "includeInScope":
+                                    scopeIncluded.add((String) a2[0]);
+                                    return null;
+                                default:
+                                    return null;
+                            }
+                        });
+                }
                 // Stub persistence with empty prefs
                 if ("persistence".equals(methodName)) {
                     return java.lang.reflect.Proxy.newProxyInstance(
@@ -493,5 +756,44 @@ class McPServerIntegrationTest {
                 // All other MontoyaApi methods return null
                 return null;
             });
+    }
+
+    /** Minimal deterministic tool for gate tests; optional fixed outbound target. */
+    private static final class TestTool implements Tool, TargetedTool {
+        private final String name;
+        private final String target;
+
+        TestTool(String name, String target) {
+            this.name = name;
+            this.target = target;
+        }
+
+        @Override
+        public ToolDefinition definition() {
+            ObjectNode schema = McpJson.createObjectNode();
+            schema.put("type", "object");
+            ObjectNode props = McpJson.createObjectNode();
+            props.set("value", McpJson.property("string", "Value echoed back"));
+            schema.set("properties", props);
+            schema.set("required", McpJson.createArrayNode());
+            return new ToolDefinition(name, "Integration-test tool", schema);
+        }
+
+        @Override
+        public ObjectNode inputSchema() {
+            return definition().inputSchema();
+        }
+
+        @Override
+        public Object execute(Map<String, Object> args) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("echo", args.getOrDefault("value", "ok"));
+            return result;
+        }
+
+        @Override
+        public List<String> targetUrls(Map<String, Object> args) {
+            return target != null ? List.of(target) : List.of();
+        }
     }
 }

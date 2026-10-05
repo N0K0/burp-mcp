@@ -72,6 +72,27 @@ public class BurpInfoTool implements Tool {
             result.put("mcpSocketPath", socketPath);
         }
 
+        // Access-control context so agents can understand gate outcomes
+        try {
+            burp.mcp.util.McpConfig cfg = burp.mcp.util.McpConfig.getInstance();
+            result.put("scopeEnforcement", cfg.getScopeEnforcement());
+            result.put("approvalWaitSeconds", cfg.getApprovalWaitSeconds());
+            result.put("approvalTtlSeconds", cfg.getApprovalTtlSeconds());
+        } catch (Exception ignored) {
+            // Config unavailable (mock/startup) — omit
+        }
+        try {
+            burp.mcp.util.ApprovalManager approvals = burp.mcp.util.McpConfig.getApprovalManager();
+            if (approvals != null) {
+                result.put("pendingApprovals", approvals.pendingCount());
+                result.put("sessionGrants", Map.of(
+                        "tools", new java.util.ArrayList<>(approvals.getToolGrants()),
+                        "origins", new java.util.ArrayList<>(approvals.getOriginGrants())));
+            }
+        } catch (Exception ignored) {
+            // Approval manager unavailable — omit
+        }
+
         return result;
     }
 }

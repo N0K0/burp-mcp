@@ -41,6 +41,10 @@ public class SettingsPanel extends JPanel {
     private final JCheckBox metricsEnabledCheck;
     private final JCheckBox cacheEnabledCheck;
 
+    // Operator approvals
+    private final JTextField approvalWaitField;
+    private final JTextField approvalTtlField;
+
     // Logging group
     private final JComboBox<String> logLevelCombo;
     private final JTextField loggingFilePathField;
@@ -123,6 +127,22 @@ public class SettingsPanel extends JPanel {
         metricsEnabledCheck = checkbox(featuresPanel, fg, 2, "Enable metrics tracking", cfg.isMetricsEnabled());
         cacheEnabledCheck = checkbox(featuresPanel, fg, 3, "Enable request cache", cfg.isCacheEnabled());
         allSections.add(featuresPanel);
+
+        // ── Operator approvals ──
+        JPanel approvalsPanel = new JPanel(new GridBagLayout());
+        approvalsPanel.setBorder(new TitledBorder("Operator approvals (Prompt mode / out-of-scope targets)"));
+        GridBagConstraints agp = grid();
+        approvalWaitField = addValidatedRow(approvalsPanel, agp, 0, "Wait for decision (seconds):",
+                String.valueOf(cfg.getApprovalWaitSeconds()), "5-600");
+        approvalWaitField.setToolTipText(McpColors.tooltip(
+                "How long a gated tool call blocks for an operator decision. If nobody answers in "
+                + "time the agent gets an APPROVAL_PENDING response and can retry."));
+        approvalTtlField = addValidatedRow(approvalsPanel, agp, 1, "Pending TTL (seconds):",
+                String.valueOf(cfg.getApprovalTtlSeconds()), "30-3600");
+        approvalTtlField.setToolTipText(McpColors.tooltip(
+                "How long an undecided approval stays queued for a retry before it expires and "
+                + "is cancelled."));
+        allSections.add(approvalsPanel);
 
         // ── Logging ──
         JPanel loggingPanel = new JPanel(new GridBagLayout());
@@ -257,6 +277,8 @@ public class SettingsPanel extends JPanel {
             cfg.setTlsMode((String) tlsModeCombo.getSelectedItem());
             cfg.setTlsKeystorePath(tlsKeystorePathField.getText().trim());
             cfg.setTlsKeystorePassword(new String(tlsKeystorePasswordField.getPassword()));
+            cfg.setApprovalWaitSeconds(parseInt(approvalWaitField, 30));
+            cfg.setApprovalTtlSeconds(parseInt(approvalTtlField, 300));
 
             java.util.List<String> errors = cfg.validate();
             try {
@@ -302,6 +324,8 @@ public class SettingsPanel extends JPanel {
         tlsModeCombo.setSelectedItem("self_signed");
         tlsKeystorePathField.setText("");
         tlsKeystorePasswordField.setText("burpmcp");
+        approvalWaitField.setText("30");
+        approvalTtlField.setText("300");
         statusLabel.setText("Defaults loaded. Press Save to apply.");
         statusLabel.setForeground(McpColors.BLUE);
     }
@@ -333,6 +357,8 @@ public class SettingsPanel extends JPanel {
                 lines.add(jsonLine("cache_enabled", cfg.isCacheEnabled()));
                 lines.add(jsonLine("auth_enabled", cfg.isAuthEnabled()));
                 lines.add(jsonLine("tls_enabled", cfg.isTlsEnabled()));
+                lines.add(jsonLine("approval_wait_seconds", cfg.getApprovalWaitSeconds()));
+                lines.add(jsonLine("approval_ttl_seconds", cfg.getApprovalTtlSeconds()));
                 lines.add(jsonLine("tls_mode", cfg.getTlsMode()));
                 lines.add(jsonLine("tls_keystore_path", cfg.getTlsKeystorePath()));
                 // Secrets (auth_token, tls_keystore_password) are deliberately omitted.
@@ -373,6 +399,8 @@ public class SettingsPanel extends JPanel {
                 if (node.has("cache_enabled")) cacheEnabledCheck.setSelected(node.get("cache_enabled").asBoolean());
                 if (node.has("auth_enabled")) authEnabledCheck.setSelected(node.get("auth_enabled").asBoolean());
                 if (node.has("tls_enabled")) tlsEnabledCheck.setSelected(node.get("tls_enabled").asBoolean());
+                if (node.has("approval_wait_seconds")) approvalWaitField.setText(String.valueOf(node.get("approval_wait_seconds").asInt()));
+                if (node.has("approval_ttl_seconds")) approvalTtlField.setText(String.valueOf(node.get("approval_ttl_seconds").asInt()));
                 if (node.has("tls_mode")) tlsModeCombo.setSelectedItem(node.get("tls_mode").asText());
                 statusLabel.setText("Config imported. Press Save to apply.");
                 statusLabel.setForeground(McpColors.BLUE);
@@ -432,6 +460,8 @@ public class SettingsPanel extends JPanel {
                         case "0-86400" -> v >= 0 && v <= 86400;
                         case "0-10000 (0=disabled)" -> v >= 0 && v <= 10000;
                         case "1-100" -> v >= 1 && v <= 100;
+                        case "5-600" -> v >= 5 && v <= 600;
+                        case "30-3600" -> v >= 30 && v <= 3600;
                         default -> true;
                     };
                     f.setBorder(ok ? UIManager.getBorder("TextField.border")

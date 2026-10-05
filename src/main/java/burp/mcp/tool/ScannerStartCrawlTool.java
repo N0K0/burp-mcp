@@ -16,7 +16,7 @@ import java.util.Map;
 /**
  * Start a site crawl.
  */
-public class ScannerStartCrawlTool extends ScannerBase implements Tool {
+public class ScannerStartCrawlTool extends ScannerBase implements Tool, TargetedTool {
 
     public ScannerStartCrawlTool(MontoyaApi api) {
         super(api);
@@ -102,6 +102,20 @@ public class ScannerStartCrawlTool extends ScannerBase implements Tool {
                     + ". Poll scanner_crawl_status for request/error counts.");
         }
         return result;
+    }
+
+    @Override
+    public List<String> targetUrls(Map<String, Object> args) {
+        List<String> targets = new ArrayList<>();
+        Object urlsObj = args.get("seed_urls");
+        if (urlsObj instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof String s && !s.isEmpty()) {
+                    targets.add(s);
+                }
+            }
+        }
+        return targets;
     }
 
     private McpError crawlError(Exception e) {

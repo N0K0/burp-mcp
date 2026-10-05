@@ -15,13 +15,14 @@ import burp.mcp.util.McpJson;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.util.List;
 import java.util.Map;
 
 /**
  * Send a single HTTP request and return the response.
  * Supports sending by URL or by raw HTTP request string.
  */
-public class HttpSendRequestTool implements Tool {
+public class HttpSendRequestTool implements Tool, TargetedTool {
 
     private final MontoyaApi api;
 
@@ -128,11 +129,84 @@ public class HttpSendRequestTool implements Tool {
         }
     }
 
+    @Override
+    public List<String> targetUrls(Map<String, Object> args) {
+        try {
+            String rawRequest = (String) args.get("raw_request");
+            String url = (String) args.get("url");
+            if (rawRequest != null && !rawRequest.isEmpty()) {
+                String resolved = targetUrlFromRaw(rawRequest, url);
+                return resolved != null ? List.of(resolved) : List.of();
+            }
+            if (url != null && !url.isEmpty()) {
+                return List.of(url);
+            }
+        } catch (Exception ignored) {
+            // Malformed arguments are the tool's job to report on execution.
+        }
+        return List.of();
+    }
+
+    /**
+     * Derive a target URL from a raw HTTP request without Montoya factories
+     * (unit-testable). Absolute-form targets win; otherwise the Host header
+     * supplies the authority. Returns null when no target can be derived.
+     */
+    static String targetUrlFromRaw(String rawRequest, String urlHint) {
+        if (urlHint != null && !urlHint.isEmpty()) {
+            return urlHint;
+        }
+        if (rawRequest == null || rawRequest.isEmpty()) {
+            return null;
+        }
+        String[] lines = rawRequest.replace("\r\n", "\n").split("\n");
+        if (lines.length == 0) {
+            return null;
+        }
+        String[] requestLine = lines[0].trim().split("\\s+");
+        if (requestLine.length < 2) {
+            return null;
+        }
+        String target = requestLine[1].trim();
+        if (target.matches("^[a-zA-Z][a-zA-Z0-9+.-]*://.*")) {
+            return target;
+        }
+        String host = null;
+        for (int i = 1; i < lines.length; i++) {
+            String line = lines[i];
+            if (line.isEmpty()) {
+                break; // end of headers
+            }
+            int colon = line.indexOf(':');
+            if (colon > 0 && line.substring(0, colon).trim().equalsIgnoreCase("Host")) {
+                host = line.substring(colon + 1).trim();
+                break;
+            }
+        }
+        if (host == null || host.isEmpty()) {
+            return null;
+        }
+        ServiceParts parts;
+        try {
+            parts = partsFromHostHeader(host);
+        } catch (McpError e) {
+            return null;
+        }
+        String scheme = parts.secure() ? "https" : "http";
+        boolean defaultPort = (parts.secure() && parts.port() == 443)
+                || (!parts.secure() && parts.port() == 80);
+        String hostPart = parts.host().contains(":") ? "[" + parts.host() + "]" : parts.host();
+        String path = target.isEmpty() ? "/" : target;
+        if (!path.startsWith("/")) {
+            path = "/" + path;
+        }
+        return scheme + "://" + hostPart + (defaultPort ? "" : ":" + parts.port()) + path;
+    }
+
     /**
      * Map an http_mode argument to Montoya HttpMode. Package-visible for testing.
      */
-    static HttpMode parseHttpMode(Object raw) {
-        if (raw == null) {
+    static HttpMode parseHttpMode(Object raw) {        if (raw == null) {
             return HttpMode.AUTO;
         }
         if (!(raw instanceof String)) {

@@ -70,8 +70,9 @@ The extension runs inside Burp's JVM on the Montoya API, so an agent works on
 the project you have open: the same proxy history, site map, scope, cookies,
 and Professional license.
 
-It adds a "Burp MCP" tab with five screens: Status (Start/Stop/Restart,
-metrics, request log), Settings, Tool Tester, Permissions, and Messages.
+It adds a "Burp MCP" tab with six screens: Status (Start/Stop/Restart,
+metrics, request log), Settings, Tool Tester, Permissions, Approvals, and
+Messages.
 
 ## Compared with PortSwigger's MCP server
 
@@ -84,7 +85,7 @@ tradeoffs. Official details below are from its repository as of October 2026.
 | Transport | MCP over SSE on `127.0.0.1:9876`, plus a bundled stdio proxy | JSON-RPC over HTTP POST on TCP `:4444` and a per-project Unix socket |
 | Tools | 27 (24 on Community) | 53 (42 on Community) |
 | Several Burp projects | one port per instance, set per instance in its MCP tab | one socket per project, automatic |
-| Safety | approval dialog before requests and data access, by default | policy modes: read-only, custom per tool, sensitivity gate |
+| Safety | approval dialog before requests and data access, by default | policy modes: read-only, prompt, custom per tool, sensitivity gate; out-of-scope targets prompt before traffic is sent |
 | Auth and TLS | none | optional Bearer token and TLS |
 | Operations | Burp's extension log | health endpoint, Prometheus metrics, JSON logs, rate limits, circuit breakers, Start/Stop/Restart |
 
@@ -287,7 +288,7 @@ Custom clients POST JSON-RPC to `/` with `initialize`, `tools/list`, and
 
 ## Permissions and safety
 
-Three modes in the Permissions tab:
+Four modes in the Permissions tab:
 
 - Read-Write (default): everything allowed.
 - Read-Only: queries only. That covers `burp_info`, `project_create`,
@@ -298,17 +299,44 @@ Three modes in the Permissions tab:
   `http_get_request`, `http_diff_responses`, `http_keyword_search`,
   `config_get`, `config_list_preferences`, the scanner issue reads, and
   `collaborator_interactions`.
-- Custom: enable tools one by one. Deny wins, and unlisted tools stay
-  allowed.
+- Prompt: reads run, writes ask the operator first.
+- Custom: per-tool policy — click a tool to cycle Allow → Prompt → Deny.
+  Unlisted tools stay allowed.
 
 The sensitivity switch blocks `scope_set`, `config_set`,
 `scanner_start_audit`, `scanner_start_crawl`, `scanner_crawl_stop`,
 `scanner_bcheck_import`, `task_engine_set`, and `proxy_toggle_intercept` in
-every mode.
+every mode; it never downgrades a block to a prompt.
 
-`http_send_request` and `http_send_requests` can reach anything Burp can
-reach; Burp's scope does not restrict them. Scanner and crawler tools
-generate real traffic against the target.
+### Operator approvals
+
+When a call needs approval, the Approvals tab shows a card (and a dismissible
+popup) with the tool, targets, and arguments:
+
+- **Permission prompt**: Allow once, Allow for session, or Deny with a reason.
+- **Out of scope**: Add to scope (adds the origin to Burp's target scope for
+  the project), Allow once, Allow for session, or Deny with a reason.
+
+The decision (including the deny reason) is returned to the agent harness.
+"Allow for session" grants last until the extension is reloaded or the grants
+are cleared in the Approvals tab. The gated call waits `approval_wait_seconds`
+for a decision; if nobody answers it returns `-32008 APPROVAL_PENDING` and the
+agent retries the same call, so nothing executes after the client has stopped
+waiting. Pending requests expire after `approval_ttl_seconds`.
+
+Target-scope enforcement covers the traffic-sending tools
+(`http_send_request`, `http_send_requests`, `logger_add`,
+`scanner_start_audit`, `scanner_start_crawl`). It defaults to **prompt**:
+out-of-scope traffic waits for the operator. If Burp's target scope is empty,
+every target counts as out-of-scope. Set `scope_enforcement=deny` to refuse
+out-of-scope calls with `-32010` and no dialog, or `off` to disable the check.
+`BURP_MCP_SCOPE_ENFORCEMENT=off` does the same for automation. Redirect hops
+are not pre-checked, and the scanner follows Burp's own scope rules once
+seeded.
+
+`http_send_to_*` staging tools and other non-sending tools are not
+scope-gated. Scanner and crawler tools generate real traffic against the
+target.
 
 ## Configuration
 
@@ -343,6 +371,10 @@ Settings tab exposes all of them with JSON export/import. Exports omit
 | `tls_mode` | self_signed | `self_signed` or `custom` |
 | `tls_keystore_path` | (none) | PKCS12 path for `custom` mode |
 | `tls_keystore_password` | burpmcp | Keystore password |
+| `scope_enforcement` | prompt | Out-of-scope traffic: `prompt`, `deny`, or `off` |
+| `approval_wait_seconds` | 30 | How long a gated call blocks for a decision (5-600) |
+| `approval_ttl_seconds` | 300 | How long an undecided request stays queued (30-3600) |
+| `approval_popup_enabled` | true | Pop a dialog for new approval requests (always listed in the tab) |
 
 Environment variables win over stored preferences:
 
@@ -352,6 +384,9 @@ BURP_MCP_BIND_ADDRESS=127.0.0.1
 BURP_MCP_AUTH_TOKEN=secret
 BURP_MCP_LOG_LEVEL=INFO
 BURP_MCP_SOCKET_PATH=/tmp/burp-proj-a.sock
+BURP_MCP_SCOPE_ENFORCEMENT=off
+BURP_MCP_APPROVAL_WAIT_SECONDS=30
+BURP_MCP_APPROVAL_TTL_SECONDS=300
 ```
 
 Bad values are logged at startup as `Invalid config: ...`. An empty token
@@ -398,9 +433,12 @@ Errors come back as JSON-RPC codes:
 | `-32002` | Bad params |
 | `-32003` | Unknown method or tool |
 | `-32004` | Request failed (DNS, timeout, refused) |
-| `-32005` | Auth or permission denied |
+| `-32005` | Auth or permission denied (deny reason in `data.reason`) |
 | `-32006` | Rate limited (`429`) |
 | `-32007` | Server busy (HTTP 503: connection cap or saturated pool) |
+| `-32008` | Approval pending — retry the same call to collect the decision |
+| `-32009` | Approval expired or was cancelled before a decision; nothing ran |
+| `-32010` | Target out of scope (`scope_enforcement=deny`); add it or ask the operator |
 
 A malformed `Content-Length` or truncated body returns `400`, not `500`.
 
@@ -420,6 +458,8 @@ the extension.
 | `401` on every call | Wrong token | Copy the token from Settings; check `BURP_MCP_AUTH_TOKEN` |
 | `503` auth misconfigured | `auth_enabled=true`, empty token | Set a token, then Start or Restart |
 | `429` | Rate limit hit | Wait for `Retry-After`, raise the limit, or set it to 0 |
+| `-32008` on a send | Approval pending, nobody answered in time | Answer in the Approvals tab and let the agent retry, or raise `approval_wait_seconds` |
+| Every send prompts | Burp's target scope is empty | Add targets to scope (or click Add to scope on the card), or set `scope_enforcement=off` |
 | Empty proxy history | No traffic yet | Browse through Burp first |
 | TLS errors with self-signed | Missing SAN in older certificates | Use a `custom` PKCS12 or trust the certificate |
 
@@ -427,7 +467,7 @@ the extension.
 
 ```bash
 mvn clean compile
-mvn test                      # 119 unit and mocked-transport tests
+mvn test                      # 180 unit and mocked-transport tests
 mvn clean package -DskipTests
 ```
 
@@ -453,7 +493,9 @@ Conventions and project layout are in [AGENTS.md](AGENTS.md).
 The server binds to loopback by default. Opening `bind_address` to `0.0.0.0`
 without auth or TLS exposes Burp to your network. The tools act with your
 Burp session's access, so treat an MCP client like any other operator at your
-keyboard. Use Read-Only mode and the sensitivity switch for passive work.
+keyboard. Use Read-Only mode and the sensitivity switch for passive work, or
+Prompt mode plus scope enforcement to review writes and out-of-scope traffic
+before they run.
 
 ## License
 

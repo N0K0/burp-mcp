@@ -4,8 +4,21 @@ All notable changes to the Burp MCP Server plugin.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-06
+
 ### Added
+- **Prompt permission mode** and per-tool **Allow / Prompt / Deny** policies in Custom mode; reads always run, gated writes wait for the operator
+- **Operator approvals** for permission prompts and out-of-scope targets: Allow once, Allow for session, Deny with a reason, and Add to scope for targets — shown in a new Approvals tab (with pending badge) and a dismissible popup. Decisions, including deny reasons, are returned to the agent harness
+- **Target-scope enforcement** for traffic-sending tools (`http_send_request`, `http_send_requests`, `logger_add`, `scanner_start_audit`, `scanner_start_crawl`), with `scope_enforcement` (prompt/deny/off), `approval_wait_seconds`, `approval_ttl_seconds`, and `approval_popup_enabled` settings plus `BURP_MCP_*` env overrides
+- Gated calls use a wait → pending → retry protocol so nothing executes after the client stops waiting; new error codes `-32008` (approval pending), `-32009` (expired/cancelled), `-32010` (out of scope) with structured `data` payloads
+- `burp_info` reports the scope-enforcement mode, pending approvals, and active session grants
 - Docs site: README, changelog, and javadoc deploy to GitHub Pages on pushes to `main`
+
+### Changed
+- `LiveBurpIT` seeds its loopback origins into Burp's target scope and removes only what it added; test suite grown to 180 tests
+
+### Fixed
+- Extension reloads no longer leave orphaned Swing timers polling a dead Montoya API (repeated EDT `NullPointerException` spam): the unloading handler now disposes UI timers/listeners, and the global uncaught handler can no longer mask the original exception
 
 ## [1.2.0] - 2026-10-05
 

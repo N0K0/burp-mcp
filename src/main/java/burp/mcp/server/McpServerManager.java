@@ -2,6 +2,7 @@ package burp.mcp.server;
 
 import burp.api.montoya.MontoyaApi;
 import burp.mcp.tool.McpToolRegistry;
+import burp.mcp.util.ApprovalManager;
 import burp.mcp.util.ErrorLogger;
 import burp.mcp.util.McpConfig;
 import burp.mcp.util.MetricsCollector;
@@ -33,6 +34,8 @@ public class McpServerManager {
     private final McpToolRegistry registry;
     private final PermissionManager permissions;
     private final MetricsCollector metrics;
+    private final ApprovalManager approvalManager;
+    private final AccessGate accessGate;
 
     private volatile McPServer server;
     private volatile UnixSocketServer socketServer;
@@ -48,6 +51,9 @@ public class McpServerManager {
         this.registry = registry;
         this.permissions = permissions;
         this.metrics = metrics;
+        this.approvalManager = new ApprovalManager();
+        this.accessGate = new AccessGate(api, permissions, approvalManager);
+        McpConfig.setApprovalManager(approvalManager);
     }
 
     // ── Lifecycle ────────────────────────────────────────────────
@@ -66,7 +72,7 @@ public class McpServerManager {
         reloadCaches(config);
 
         McPServer srv = new McPServer(api, registry, config.getBindAddress(),
-                config.getPort(), permissions, metrics);
+                config.getPort(), permissions, metrics, accessGate);
         srv.setLogListener(logListener);
 
         tcpError = null;
@@ -139,6 +145,14 @@ public class McpServerManager {
 
     public MetricsCollector getMetrics() {
         return metrics;
+    }
+
+    public ApprovalManager getApprovalManager() {
+        return approvalManager;
+    }
+
+    public AccessGate getAccessGate() {
+        return accessGate;
     }
 
     /** TCP serving, i.e. the port was bound successfully. */

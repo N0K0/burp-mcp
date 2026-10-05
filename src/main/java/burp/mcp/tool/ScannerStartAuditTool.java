@@ -18,7 +18,7 @@ import java.util.Map;
 /**
  * Start an active vulnerability scan on specified URLs.
  */
-public class ScannerStartAuditTool extends ScannerBase implements Tool {
+public class ScannerStartAuditTool extends ScannerBase implements Tool, TargetedTool {
 
     public ScannerStartAuditTool(MontoyaApi api) {
         super(api);
@@ -132,12 +132,29 @@ public class ScannerStartAuditTool extends ScannerBase implements Tool {
         return result;
     }
 
+    @Override
+    public List<String> targetUrls(Map<String, Object> args) {
+        List<String> targets = new ArrayList<>();
+        Object single = args.get("url");
+        if (single instanceof String s && !s.isEmpty()) {
+            targets.add(s);
+        }
+        Object urls = args.get("urls");
+        if (urls instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof String s && !s.isEmpty()) {
+                    targets.add(s);
+                }
+            }
+        }
+        return targets;
+    }
+
     /**
      * Build an audit seed request from a URL, applying optional custom
      * headers from the 'headers' argument. Package-visible for testing.
      */
-    static HttpRequest buildSeedRequest(String url, Map<String, Object> args) {
-        HttpRequest request = HttpRequest.httpRequestFromUrl(url);
+    static HttpRequest buildSeedRequest(String url, Map<String, Object> args) {        HttpRequest request = HttpRequest.httpRequestFromUrl(url);
         Object headersObj = args.get("headers");
         if (headersObj instanceof Map) {
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) headersObj).entrySet()) {

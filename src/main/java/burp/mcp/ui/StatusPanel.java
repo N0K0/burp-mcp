@@ -293,52 +293,63 @@ public class StatusPanel extends JPanel {
 
         MetricsCollector m = manager.getMetrics();
         SwingUtilities.invokeLater(() -> {
-            boolean tcpRunning = manager.isTcpRunning();
-            String tcpError = manager.getTcpError();
-            if (tcpRunning) {
-                tcpStatusLabel.setText("Listening on " + manager.getEndpoint());
-                tcpStatusLabel.setForeground(GREEN);
-            } else if (tcpError != null) {
-                tcpStatusLabel.setText("Failed: " + tcpError);
-                tcpStatusLabel.setForeground(RED);
-            } else {
-                tcpStatusLabel.setText("Stopped");
-                tcpStatusLabel.setForeground(GRAY);
+            try {
+                refreshOnEdt(m);
+            } catch (Exception e) {
+                // The Montoya API or manager is gone (extension unloaded/reloaded):
+                // stop polling instead of spamming the EDT with NPEs from an
+                // orphaned timer.
+                refreshTimer.stop();
             }
-
-            Path socketPath = manager.getSocketPath();
-            if (manager.isSocketRunning() && socketPath != null) {
-                socketStatusLabel.setText(socketPath.toString());
-                socketStatusLabel.setForeground(GREEN);
-                socketStatusLabel.setToolTipText("Unix socket: " + socketPath);
-            } else if (manager.getSocketError() != null) {
-                socketStatusLabel.setText("Failed: " + manager.getSocketError());
-                socketStatusLabel.setForeground(RED);
-            } else if (!McpConfig.getInstance().isSocketEnabled()) {
-                socketStatusLabel.setText("Disabled (Settings)");
-                socketStatusLabel.setForeground(GRAY);
-            } else {
-                socketStatusLabel.setText("Stopped");
-                socketStatusLabel.setForeground(GRAY);
-            }
-
-            requestCountLabel.setText(String.valueOf(manager.getServer() != null
-                    ? manager.getServer().getRequestCount() : 0));
-
-            if (m != null) {
-                uptimeLabel.setText(formatUptime(m.getUptimeSeconds()));
-                requestRateLabel.setText(String.valueOf(m.getRequestsPerMinute()));
-                p95Label.setText(m.getPercentileMs(95) + "ms");
-                errorRateLabel.setText(String.valueOf(m.getErrorCount()));
-                rateLimitedLabel.setText(String.valueOf(m.getRateLimitedCount()));
-            }
-
-            startBtn.setEnabled(!lifecycleBusy && !manager.isRunning());
-            stopBtn.setEnabled(!lifecycleBusy && manager.isRunning());
-
-            portLabel.setText(String.valueOf(McpConfig.getInstance().getPort()));
-            bindLabel.setText(McpConfig.getInstance().getBindAddress());
         });
+    }
+
+    private void refreshOnEdt(MetricsCollector m) {
+        boolean tcpRunning = manager.isTcpRunning();
+        String tcpError = manager.getTcpError();
+        if (tcpRunning) {
+            tcpStatusLabel.setText("Listening on " + manager.getEndpoint());
+            tcpStatusLabel.setForeground(GREEN);
+        } else if (tcpError != null) {
+            tcpStatusLabel.setText("Failed: " + tcpError);
+            tcpStatusLabel.setForeground(RED);
+        } else {
+            tcpStatusLabel.setText("Stopped");
+            tcpStatusLabel.setForeground(GRAY);
+        }
+
+        Path socketPath = manager.getSocketPath();
+        if (manager.isSocketRunning() && socketPath != null) {
+            socketStatusLabel.setText(socketPath.toString());
+            socketStatusLabel.setForeground(GREEN);
+            socketStatusLabel.setToolTipText("Unix socket: " + socketPath);
+        } else if (manager.getSocketError() != null) {
+            socketStatusLabel.setText("Failed: " + manager.getSocketError());
+            socketStatusLabel.setForeground(RED);
+        } else if (!McpConfig.getInstance().isSocketEnabled()) {
+            socketStatusLabel.setText("Disabled (Settings)");
+            socketStatusLabel.setForeground(GRAY);
+        } else {
+            socketStatusLabel.setText("Stopped");
+            socketStatusLabel.setForeground(GRAY);
+        }
+
+        requestCountLabel.setText(String.valueOf(manager.getServer() != null
+                ? manager.getServer().getRequestCount() : 0));
+
+        if (m != null) {
+            uptimeLabel.setText(formatUptime(m.getUptimeSeconds()));
+            requestRateLabel.setText(String.valueOf(m.getRequestsPerMinute()));
+            p95Label.setText(m.getPercentileMs(95) + "ms");
+            errorRateLabel.setText(String.valueOf(m.getErrorCount()));
+            rateLimitedLabel.setText(String.valueOf(m.getRateLimitedCount()));
+        }
+
+        startBtn.setEnabled(!lifecycleBusy && !manager.isRunning());
+        stopBtn.setEnabled(!lifecycleBusy && manager.isRunning());
+
+        portLabel.setText(String.valueOf(McpConfig.getInstance().getPort()));
+        bindLabel.setText(McpConfig.getInstance().getBindAddress());
     }
 
     private static String formatUptime(long seconds) {

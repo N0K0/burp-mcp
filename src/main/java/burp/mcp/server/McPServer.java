@@ -2,6 +2,9 @@ package burp.mcp.server;
 
 import burp.api.montoya.MontoyaApi;
 import burp.mcp.tool.McpToolRegistry;
+import burp.mcp.tool.TargetedTool;
+import burp.mcp.tool.Tool;
+import burp.mcp.util.ApprovalManager;
 import burp.mcp.util.CircuitBreaker;
 import burp.mcp.util.LogEntry;
 import burp.mcp.util.McpConfig;
@@ -22,6 +25,7 @@ import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -38,6 +42,7 @@ public class McPServer extends NanoHTTPD {
     private final McpToolRegistry registry;
     private final PermissionManager permissions;
     private final MetricsCollector metrics;
+    private final AccessGate accessGate;
     private final AtomicLong requestCount = new AtomicLong(0);
     private volatile Consumer<String> logListener;
     private final McpConfig config;
@@ -53,12 +58,21 @@ public class McPServer extends NanoHTTPD {
 
     public McPServer(MontoyaApi api, McpToolRegistry registry, String bindAddress, int port,
                      PermissionManager permissions, MetricsCollector metrics) {
+        this(api, registry, bindAddress, port, permissions, metrics,
+                new AccessGate(api, permissions, new ApprovalManager()));
+    }
+
+    public McPServer(MontoyaApi api, McpToolRegistry registry, String bindAddress, int port,
+                     PermissionManager permissions, MetricsCollector metrics, AccessGate accessGate) {
         super(bindAddress, port);
         this.api = api;
         this.registry = registry;
         this.permissions = permissions;
         this.metrics = metrics;
         this.config = McpConfig.getInstance();
+        this.accessGate = accessGate != null
+                ? accessGate
+                : new AccessGate(api, permissions, new ApprovalManager());
         int threads = config != null ? config.getThreadPoolSize() : 10;
         int queue = config != null ? config.getMaxQueueSize() : 100;
         this.boundedRunner = new BoundedAsyncRunner(threads, queue);
@@ -253,18 +267,6 @@ public class McPServer extends NanoHTTPD {
                     }
                 }
 
-                // ── Permission check (canonical name) ──
-                String deny = permissions.checkAccess(toolName);
-                if (deny != null) {
-                    logStructured("WARN", "McPServer", correlationId, startTime,
-                            "PERM DENIED: " + toolName + " — " + deny, null);
-                    throw new McpError(McpError.PERMISSION_DENIED, deny);
-                }
-
-                // Permission gate outcome (DEBUG)
-                logStructured("DEBUG", "McPServer", correlationId, startTime,
-                        "perm gate: " + toolName + " ALLOWED", null);
-
                 Object rawArgs = params.get("arguments");
                 Map<String, Object> toolArgs;
                 if (rawArgs == null) {
@@ -281,6 +283,32 @@ public class McPServer extends NanoHTTPD {
                 String cbCheck = checkCircuitBreaker(toolName, correlationId, startTime);
                 if (cbCheck != null) {
                     throw new McpError(McpError.REQUEST_FAILED, cbCheck);
+                }
+
+                // ── Permission + target scope gate (may wait for an operator decision) ──
+                List<String> targets = resolveTargets(toolName, toolArgs);
+                AccessGate.Result gateResult = accessGate.check(
+                        extractClientIp(session), toolName, toolArgs, targets);
+                if (!gateResult.isAllowed()) {
+                    boolean pending = gateResult.isPending();
+                    logStructured("WARN", "McPServer", correlationId, startTime,
+                            (pending ? "APPROVAL PENDING: " : "GATE DENIED: ") + toolName
+                                    + " — " + gateResult.getMessage(), null);
+                    notifyLogListener("[burp-mcp] WARN | " + (pending ? "APPROVAL PENDING " : "DENIED ")
+                            + toolName + " | " + gateResult.getMessage(), "WARN");
+                    if (metrics != null) {
+                        metrics.recordRequest();
+                        if (!pending) {
+                            metrics.recordError();
+                        }
+                    }
+                    return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_JSON,
+                            McpJson.buildError(gateResult.getCode(), gateResult.getMessage(),
+                                    gateResult.getData(), req.id));
+                }
+                if (!targets.isEmpty()) {
+                    logStructured("DEBUG", "McPServer", correlationId, startTime,
+                            "scope gate passed: " + toolName + " targets=" + targets, null);
                 }
 
                 logStructured("DEBUG", "McPServer", correlationId, startTime,
@@ -445,16 +473,34 @@ public class McPServer extends NanoHTTPD {
     public long getRejectedCount() { return boundedRunner.getRejectedCount(); }
     @Override
     public void stop() {
+        try { accessGate.onServerStop(); } catch (Exception ignored) {}
         try { boundedRunner.shutdown(); } catch (Exception ignored) {}
         super.stop();
     }
     public PermissionManager getPermissions() { return permissions; }
+    public AccessGate getAccessGate() { return accessGate; }
     public MetricsCollector getMetrics() { return metrics; }
     public ConcurrentHashMap<String, CircuitBreaker> getCircuitBreakers() { return circuitBreakers; }
     public void enableTls(SSLServerSocketFactory f, String... p) { makeSecure(f, p); }
     public void setLogListener(Consumer<String> l) { this.logListener = l; }
 
     // ── Circuit breaker helpers ──
+
+    /** Target URLs for scope gating, derived from the tool's own argument parsing. */
+    private List<String> resolveTargets(String toolName, Map<String, Object> args) {
+        try {
+            Tool tool = registry.getTool(toolName);
+            if (tool instanceof TargetedTool targeted) {
+                List<String> targets = targeted.targetUrls(args);
+                if (targets != null && !targets.isEmpty()) {
+                    return targets;
+                }
+            }
+        } catch (Exception ignored) {
+            // Best-effort: malformed arguments are reported by the tool itself.
+        }
+        return List.of();
+    }
 
     private String checkCircuitBreaker(String toolName, String correlationId, long startTime) {
         if (!isExternalTool(toolName)) return null;

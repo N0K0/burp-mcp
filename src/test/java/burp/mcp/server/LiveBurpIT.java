@@ -22,6 +22,8 @@ import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -42,6 +44,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * test; requires Professional). Tests only touch a unique localhost scope
  * subtree (cleaned up) and a loopback target started by the suite itself —
  * no external traffic, no scans unless explicitly allowed.
+ *
+ * <p>The suite seeds its two loopback origins into Burp's target scope (and
+ * removes only what it added) so the out-of-scope approval gate cannot block
+ * the send tests. If the operator has enabled Prompt mode for sensitive tools,
+ * {@code scope_set} may need an approval click before the send tests run.
  */
 class LiveBurpIT {
 
@@ -55,6 +62,7 @@ class LiveBurpIT {
     private static HttpsServer tlsTarget;
     private static int tlsPort;
     private static String edition = "";
+    private static final List<String> seededScopes = new ArrayList<>();
 
     @BeforeAll
     static void setup() throws Exception {
@@ -125,16 +133,47 @@ class LiveBurpIT {
         tlsTarget.start();
         tlsPort = tlsTarget.getAddress().getPort();
 
+        // Seed the two loopback origins into Burp's target scope so the
+        // out-of-scope approval gate cannot stall/deny the send tests.
+        ensureInScope("http://127.0.0.1:" + targetPort);
+        ensureInScope("https://127.0.0.1:" + tlsPort);
+
         edition = resultOf(callTool("burp_info", "{}")).path("burpEdition").asText("");
     }
 
     @AfterAll
     static void teardown() {
+        // Remove only the scope entries this suite added.
+        for (String url : seededScopes) {
+            try {
+                resultOf(callTool("scope_set", "{\"url\":" + jsonStr(url) + ",\"action\":\"exclude\"}"));
+            } catch (Exception ignored) {
+                // Best effort: teardown must not fail the suite.
+            }
+        }
         if (target != null) {
             target.stop(0);
         }
         if (tlsTarget != null) {
             tlsTarget.stop(0);
+        }
+    }
+
+    /** Add an origin to Burp's target scope unless it is already in scope. */
+    private static void ensureInScope(String origin) {
+        String url = origin + "/";
+        try {
+            JsonNode check = resultOf(callTool("scope_check", "{\"url\":" + jsonStr(url) + "}"));
+            if (check.path("in_scope").asBoolean()) {
+                return;
+            }
+            JsonNode set = resultOf(callTool("scope_set",
+                    "{\"url\":" + jsonStr(url) + ",\"action\":\"include\"}"));
+            if (set.path("success").asBoolean()) {
+                seededScopes.add(url);
+            }
+        } catch (Exception e) {
+            System.out.println("[LiveBurpIT] could not seed scope for " + url + ": " + e.getMessage());
         }
     }
 

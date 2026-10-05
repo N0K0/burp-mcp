@@ -240,6 +240,66 @@ public class McpConfig {
         preferences.setString("audit_log_enabled", String.valueOf(enabled));
     }
 
+    // ── Approvals & scope enforcement ───────────────────────────────
+
+    private static final String DEFAULT_SCOPE_ENFORCEMENT = "prompt";
+    private static final int DEFAULT_APPROVAL_WAIT_SECONDS = 30;
+    private static final int DEFAULT_APPROVAL_TTL_SECONDS = 300;
+
+    /** Scope policy: "off", "prompt" or "deny". */
+    public String getScopeEnforcement() {
+        String env = System.getenv("BURP_MCP_SCOPE_ENFORCEMENT");
+        if (env != null && !env.isBlank()) {
+            return env.trim().toLowerCase(java.util.Locale.ROOT);
+        }
+        String val = preferences.getString("scope_enforcement");
+        return val != null && !val.isBlank()
+                ? val.trim().toLowerCase(java.util.Locale.ROOT)
+                : DEFAULT_SCOPE_ENFORCEMENT;
+    }
+
+    public void setScopeEnforcement(String mode) {
+        preferences.setString("scope_enforcement", mode != null ? mode : DEFAULT_SCOPE_ENFORCEMENT);
+    }
+
+    /** Seconds a gated tool call waits for an operator decision before returning pending. */
+    public int getApprovalWaitSeconds() {
+        Integer env = envIntOrNull("BURP_MCP_APPROVAL_WAIT_SECONDS");
+        if (env != null) {
+            return env;
+        }
+        Integer val = preferences.getInteger("approval_wait_seconds");
+        return Objects.requireNonNullElse(val, DEFAULT_APPROVAL_WAIT_SECONDS);
+    }
+
+    public void setApprovalWaitSeconds(int seconds) {
+        preferences.setInteger("approval_wait_seconds", seconds);
+    }
+
+    /** Seconds an undecided approval stays queued for a retry before expiring. */
+    public int getApprovalTtlSeconds() {
+        Integer env = envIntOrNull("BURP_MCP_APPROVAL_TTL_SECONDS");
+        if (env != null) {
+            return env;
+        }
+        Integer val = preferences.getInteger("approval_ttl_seconds");
+        return Objects.requireNonNullElse(val, DEFAULT_APPROVAL_TTL_SECONDS);
+    }
+
+    public void setApprovalTtlSeconds(int seconds) {
+        preferences.setInteger("approval_ttl_seconds", seconds);
+    }
+
+    /** Whether new approval requests pop a dialog in addition to the Approvals tab. */
+    public boolean isApprovalPopupEnabled() {
+        String val = preferences.getString("approval_popup_enabled");
+        return val == null || Boolean.parseBoolean(val);
+    }
+
+    public void setApprovalPopupEnabled(boolean enabled) {
+        preferences.setString("approval_popup_enabled", String.valueOf(enabled));
+    }
+
     // ── Authentication ──────────────────────────────────────────────
 
     public boolean isAuthEnabled() {
@@ -421,6 +481,18 @@ public class McpConfig {
         return activeSocketPath;
     }
 
+    // ── Live approval manager (set by the server manager for burp_info) ──
+
+    private static volatile ApprovalManager approvalManager;
+
+    public static void setApprovalManager(ApprovalManager manager) {
+        approvalManager = manager;
+    }
+
+    public static ApprovalManager getApprovalManager() {
+        return approvalManager;
+    }
+
     public static synchronized RequestCache getRequestCache() {
         if (requestCache == null) {
             throw new IllegalStateException("RequestCache not initialized. Ensure McpConfig is initialized first.");
@@ -450,6 +522,12 @@ public class McpConfig {
         if (getCacheTtlSeconds() < 0 || getCacheTtlSeconds() > 86400) errors.add("Cache TTL must be 0-86400 seconds");
         if (getRateLimitPerMinute() < 0 || getRateLimitPerMinute() > 10000) errors.add("Rate limit must be 0-10000 per minute");
         if (getMaxConnectionsPerIp() < 1 || getMaxConnectionsPerIp() > 100) errors.add("Max connections per IP must be 1-100");
+        String scopeEnforcement = getScopeEnforcement();
+        if (!java.util.Set.of("off", "prompt", "deny").contains(scopeEnforcement)) {
+            errors.add("Scope enforcement must be off/prompt/deny, got " + scopeEnforcement);
+        }
+        if (getApprovalWaitSeconds() < 5 || getApprovalWaitSeconds() > 600) errors.add("Approval wait must be 5-600 seconds");
+        if (getApprovalTtlSeconds() < 30 || getApprovalTtlSeconds() > 3600) errors.add("Approval TTL must be 30-3600 seconds");
         String bind = getBindAddress();
         if (bind == null || bind.isBlank()) errors.add("Bind address must not be empty");
         String logLevel = getLogLevel();

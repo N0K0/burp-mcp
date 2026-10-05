@@ -19,6 +19,9 @@ public class McpError extends RuntimeException {
     public static final int PERMISSION_DENIED = -32005;
     public static final int RATE_LIMITED = -32006;
     public static final int SERVER_BUSY = -32007;
+    public static final int APPROVAL_PENDING = -32008;
+    public static final int APPROVAL_TIMEOUT = -32009;
+    public static final int OUT_OF_SCOPE = -32010;
 
     private final int code;
     private final Object data;
