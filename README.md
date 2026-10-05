@@ -73,6 +73,35 @@ and Professional license.
 It adds a "Burp MCP" tab with five screens: Status (Start/Stop/Restart,
 metrics, request log), Settings, Tool Tester, Permissions, and Messages.
 
+## Compared with PortSwigger's MCP server
+
+PortSwigger ships an [official MCP server](https://github.com/PortSwigger/mcp-server)
+(Kotlin, GPL-3.0). Both let MCP clients drive Burp; they make different
+tradeoffs. Official details below are from its repository as of October 2026.
+
+| Aspect | PortSwigger official | This extension |
+|---|---|---|
+| Transport | MCP over SSE on `127.0.0.1:9876`, plus a bundled stdio proxy | JSON-RPC over HTTP POST on TCP `:4444` and a per-project Unix socket |
+| Tools | 27 (24 on Community) | 53 (42 on Community) |
+| Several Burp projects | one port per instance, set per instance in its MCP tab | one socket per project, automatic |
+| Safety | approval dialog before requests and data access, by default | policy modes: read-only, custom per tool, sensitivity gate |
+| Auth and TLS | none | optional Bearer token and TLS |
+| Operations | Burp's extension log | health endpoint, Prometheus metrics, JSON logs, rate limits, circuit breakers, Start/Stop/Restart |
+
+The tool sets overlap but are not identical. The official server has
+`get_active_editor_contents` / `set_active_editor_contents` (the focused
+message editor, for tight human-in-the-loop work), `generate_random_string`,
+and HTTP/2 Repeater tabs. This one adds the scanner workflow
+(`scanner_start_audit`, `scanner_start_crawl`, crawl status/stop,
+`scanner_bcheck_import`, `scanner_generate_report`), scope control,
+`sitemap_search`, the cookie jar, `http_diff_responses`,
+`http_keyword_search`, and the Organizer/Comparer/Decoder handoffs.
+
+Use the official server when you want the supported default, per-call
+approval dialogs, or an SSE/stdio-only client. Use this one when you want the
+larger tool set, several Burp projects at once, pre-authorized read-only or
+custom access for unattended runs, or auth, metrics, and logs.
+
 ## Transports and multiple projects
 
 TCP listens on `mcp_port`, 4444 by default.
