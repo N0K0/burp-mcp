@@ -15,6 +15,8 @@ per-project Unix socket.
 | Professional-only | Scanner, crawler, and Collaborator tools |
 | Clients | Any MCP client that can POST JSON-RPC to an HTTP URL |
 
+![Burp MCP Status tab: listeners, metrics, and request log](docs/images/status.png)
+
 ## Getting the extension
 
 Download `burp-mcp-server.jar` from the
@@ -64,6 +66,12 @@ SOCK=$(curl -s -X POST -H "Content-Type: application/json" \
 curl -s --unix-socket "$SOCK" http://localhost/health
 ```
 
+The Tool Tester shows the same output; `burp_info` also reports the active
+access-control state (scope enforcement, approval timing, pending requests, and
+session grants) so an agent can see why a call was blocked:
+
+![burp_info output with scope enforcement and approval fields](docs/images/burp-info-approvals.png)
+
 ## How it fits together
 
 The extension runs inside Burp's JVM on the Montoya API, so an agent works on
@@ -73,29 +81,6 @@ and Professional license.
 It adds a "Burp MCP" tab with six screens: Status (Start/Stop/Restart,
 metrics, request log), Settings, Tool Tester, Permissions, Approvals, and
 Messages.
-
-## Screenshots
-
-A gated call waits for an operator decision in the popup — Allow once, Allow
-for session, or Deny with a reason that is returned to the agent. Dismissing it
-leaves the request in the Approvals tab, which badges while anything is
-pending:
-
-![Approval popup: allow once, allow for session, or deny with a reason](docs/images/approval-popup.png)
-
-`burp_info` reports the live gate state — scope enforcement mode, approval
-wait/TTL, pending count, and session grants — so agents can see why a call was
-blocked:
-
-![burp_info output with scope enforcement and approval fields](docs/images/burp-info-approvals.png)
-
-Approval timing lives in Settings with the other server limits:
-
-![Operator approval settings: wait for decision and pending TTL](docs/images/settings-approvals.png)
-
-The Status tab shows the listeners, metrics, and request log:
-
-![Status tab with TCP and Unix socket listeners](docs/images/status.png)
 
 ## Compared with PortSwigger's MCP server
 
@@ -331,6 +316,8 @@ The sensitivity switch blocks `scope_set`, `config_set`,
 `scanner_bcheck_import`, `task_engine_set`, and `proxy_toggle_intercept` in
 every mode; it never downgrades a block to a prompt.
 
+![Permissions tab: modes, per-tool policies, and target-scope enforcement](docs/images/permissions-prompt-mode.png)
+
 ### Operator approvals
 
 When a call needs approval, the Approvals tab shows a card (and a dismissible
@@ -339,6 +326,8 @@ popup) with the tool, targets, and arguments:
 - **Permission prompt**: Allow once, Allow for session, or Deny with a reason.
 - **Out of scope**: Add to scope (adds the origin to Burp's target scope for
   the project), Allow once, Allow for session, or Deny with a reason.
+
+![Approval popup: allow once, allow for session, or deny with a reason](docs/images/approval-popup.png)
 
 The decision (including the deny reason) is returned to the agent harness.
 "Allow for session" grants last until the extension is reloaded or the grants
@@ -366,6 +355,8 @@ target.
 Burp stores these in extension preferences, so they survive restarts. The
 Settings tab exposes all of them with JSON export/import. Exports omit
 `auth_token` and `tls_keystore_password`.
+
+![Operator approval settings: wait for decision and pending TTL](docs/images/settings-approvals.png)
 
 | Key | Default | What it does |
 |-----|---------|--------------|
