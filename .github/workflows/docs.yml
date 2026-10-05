@@ -1,0 +1,62 @@
+name: Docs
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Build docs
+        run: |
+          python3 -m pip install --quiet markdown
+          mvn -B javadoc:javadoc
+          mkdir -p public/apidocs
+          if [ -d target/site/apidocs ]; then cp -r target/site/apidocs/. public/apidocs/; fi
+          if [ -d target/reports/apidocs ]; then cp -r target/reports/apidocs/. public/apidocs/; fi
+          test -f public/apidocs/index.html
+          python3 - <<'EOF'
+          import markdown
+          tpl = ("<!doctype html><html><head><meta charset='utf-8'>"
+                 "<title>{t}</title><style>body{{max-width:60em;margin:2em auto;"
+                 "font-family:sans-serif;line-height:1.5}}code{{background:#f4f4f4}}"
+                 "pre{{background:#f4f4f4;padding:1em;overflow:auto}}"
+                 "table{{border-collapse:collapse}}td,th{{border:1px solid #ccc;"
+                 "padding:.3em .6em}}</style></head><body>{b}</body></html>")
+          for src, title in (("README.md", "Burp MCP Server"), ("CHANGELOG.md", "Changelog")):
+              with open(src) as f:
+                  body = markdown.markdown(f.read(), extensions=["tables", "fenced_code"])
+              with open(f"public/{src[:-3].lower()}.html", "w") as f:
+                  f.write(tpl.format(t=title, b=body))
+          with open("public/index.html", "w") as f:
+              f.write(tpl.format(t="Burp MCP Server docs", b=(
+                  "<h1>Burp MCP Server docs</h1>"
+                  "<ul><li><a href='readme.html'>README</a></li>"
+                  "<li><a href='changelog.html'>Changelog</a></li>"
+                  "<li><a href='apidocs/index.html'>Javadoc</a></li></ul>")))
+          EOF
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deploy
+        uses: actions/deploy-pages@v4

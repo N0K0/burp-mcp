@@ -2,6 +2,11 @@
 
 All notable changes to the Burp MCP Server plugin.
 
+## [Unreleased]
+
+### Added
+- Docs site: README, changelog, and javadoc deploy to GitHub Pages on pushes to `main`
+
 ## [1.2.0] - 2026-10-05
 
 ### Added
